@@ -1,12 +1,17 @@
+import os
+os.environ.setdefault('DJANGO_ALLOW_ASYNC_UNSAFE', 'true')
+
+import hashlib
 import io
 import json
 import tempfile
 from PIL import Image
 from django.contrib.auth import get_user_model
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
+from django.core.files.base import ContentFile
 from django.test import override_settings
 from playwright.sync_api import sync_playwright, expect
-from .models import Workspace, Membership, Task, Release
+from .models import Workspace, Membership, Project, Label, Task, Release
 
 
 class BrowserWorkflowTests(StaticLiveServerTestCase):
@@ -20,9 +25,9 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         self.owner = User.objects.create_user('manager', password='Browser-manager-482!')
         self.worker = User.objects.create_user('artist', password='Browser-artist-482!')
         self.reviewer = User.objects.create_user('quality', password='Browser-quality-482!')
-        workspace = Workspace.objects.create(name='Browser Lab')
+        self.workspace = Workspace.objects.create(name='Browser Lab')
         for user, role in [(self.owner, 'owner'), (self.worker, 'annotator'), (self.reviewer, 'reviewer')]:
-            Membership.objects.create(workspace=workspace, user=user, role=role)
+            Membership.objects.create(workspace=self.workspace, user=user, role=role)
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch()
         self.page = self.browser.new_page(viewport={'width': 1440, 'height': 1100})
@@ -125,4 +130,37 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         self.assertEqual(snapshot['tasks'][0]['annotation']['relations'][0]['key'], 'controls')
         p.set_viewport_size({'width': 390, 'height': 844})
         expect(p.get_by_role('heading', name='Device labeling', exact=True)).to_be_visible()
+        self.assertEqual(self.errors, [])
+
+    def test_recovery_autosave_and_conflict_in_browser(self):
+        project = Project.objects.create(workspace=self.workspace, name='Recovery lab')
+        Label.objects.create(project=project, key='device', name='Device', attributes=[{'key': 'state', 'options': ['on', 'off']}])
+        buffer = io.BytesIO()
+        Image.new('RGB', (640, 480), '#8899aa').save(buffer, 'JPEG')
+        task = Task(project=project, filename='panel.jpg', digest=hashlib.sha256(buffer.getvalue()).hexdigest(), width=640, height=480, assignee=self.worker)
+        task.image.save('panel.jpg', ContentFile(buffer.getvalue()))
+        p = self.page
+        self.login('artist', 'Browser-artist-482!')
+        p.goto(self.live_server_url + f'/tasks/{task.pk}/')
+        p.locator('#source-image').wait_for()
+        p.wait_for_function('document.getElementById("source-image").naturalWidth > 0')
+        bounds = p.locator('#overlay').bounding_box()
+        def point(x, y):
+            return bounds['x'] + bounds['width'] * x, bounds['y'] + bounds['height'] * y
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(*point(.1, .1)); p.mouse.down(); p.mouse.move(*point(.3, .4), steps=5); p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('1')
+        with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 200, timeout=12000):
+            pass
+        expect(p.locator('#save-status')).to_contain_text('revision')
+        p.mouse.move(*point(.5, .5)); p.mouse.down(); p.mouse.move(*point(.7, .7), steps=5); p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('2')
+        p.reload()
+        p.locator('#source-image').wait_for()
+        expect(p.locator('#region-count')).to_have_text('2')
+        expect(p.locator('#save-status')).to_contain_text('Recovered')
+        Task.objects.filter(pk=task.pk).update(revision=99)
+        with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 409):
+            p.get_by_role('button', name='Save', exact=True).click()
+        expect(p.locator('#save-status')).to_contain_text('Save failed')
         self.assertEqual(self.errors, [])

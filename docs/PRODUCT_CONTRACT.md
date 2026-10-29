@@ -123,14 +123,14 @@ Enforced limits:
 
 - Image: PNG / JPEG / WebP, ≤20 MB, ≤40 MP, ≤30 files per batch
 - Annotation: ≤1000 regions, ≤2000 relations per image
-- Task queue UI: 200 rows (hard cap — see gap G2)
+- Task queue UI: paginated at 50 items/page
 
 Architecture follows from this: synchronous upload with Pillow
 re-encoding (JPEG q95), SHA-256 dedupe per project, local filesystem
 media storage, one DB. No queue/workers/object storage needed at this
 scale. Revisit if the ceiling moves above ~10⁵ tasks or multi-GB assets.
 
-> **Gap G2:** pagination beyond 200 rows and bulk operations are Phase 2.
+> Resolved (Phase 2): pagination shipped; bulk task operations remain open.
 
 ## 1.6 Hosting and security
 
@@ -176,8 +176,8 @@ downstream converters exist.
 Everything above is **decided**. The remaining items are explicitly
 deferred, not open:
 
-- Relation semantics/rules engine → Phase 2+
+- Relation semantics/rules engine → Phase 3+
 - ~~Enumerated attribute options enforcement~~ → done (Phase 1)
-- Queue pagination/bulk ops → Phase 2 (G2)
-- COCO export → Phase 2 (G3)
+- ~~Queue pagination~~ → done (Phase 2); bulk ops still open
+- ~~COCO export~~ → done (Phase 2, `/releases/<id>/coco/`)
 - SSO → not planned

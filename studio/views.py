@@ -14,6 +14,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError
 from django.http import JsonResponse, FileResponse, HttpResponseForbidden
 from django.views.decorators.http import require_POST
@@ -108,7 +109,8 @@ def project_page(request, pk):
     query = request.GET.get('q', '')[:100]
     if query:
         tasks = tasks.filter(filename__icontains=query)
-    return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': tasks[:200], 'labels': p.labels.all(), 'members': Membership.objects.filter(workspace=p.workspace).select_related('user'), 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES})
+    page = Paginator(tasks, 50).get_page(request.GET.get('page'))
+    return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': Membership.objects.filter(workspace=p.workspace).select_related('user'), 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES})
 
 
 @api
@@ -334,5 +336,58 @@ def release_download(request, pk):
     release = get_object_or_404(Release, pk=pk, project__workspace__membership__user=request.user)
     response = JsonResponse(release.snapshot, json_dumps_params={'indent': 2})
     response['Content-Disposition'] = f'attachment; filename="release-{release.pk}.json"'
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+def _polygon_area(points, width, height):
+    area = 0
+    for i, (x, y) in enumerate(points):
+        nx, ny = points[(i + 1) % len(points)]
+        area += x * width * ny * height - nx * width * y * height
+    return abs(area) / 2
+
+
+def snapshot_to_coco(snapshot, release):
+    px = lambda n: round(n, 2)
+    categories = [{'id': i + 1, 'name': l['name'], 'supercategory': l['key']} for i, l in enumerate(snapshot.get('labels', []))]
+    category_id = {l['id']: i + 1 for i, l in enumerate(snapshot.get('labels', []))}
+    images, annotations, relations = [], [], []
+    ann_id = 0
+    for task in snapshot.get('tasks', []):
+        w, h = task['width'], task['height']
+        images.append({'id': task['id'], 'file_name': task['filename'], 'width': w, 'height': h})
+        region_ids = {}
+        for region in task['annotation'].get('regions', []):
+            ann_id += 1
+            ann = {'id': ann_id, 'image_id': task['id'], 'category_id': category_id.get(region['label'], 0),
+                   'iscrowd': 0, 'attributes': region.get('attributes', {}), 'region_id': region['id'], 'region_type': region['type']}
+            if region['type'] == 'box':
+                (x0, y0), (x1, y1) = region['points']
+                ann['bbox'] = [px(x0 * w), px(y0 * h), px((x1 - x0) * w), px((y1 - y0) * h)]
+                ann['area'] = px(ann['bbox'][2] * ann['bbox'][3])
+            elif region['type'] == 'polygon':
+                ann['segmentation'] = [[px(c * s) for point in region['points'] for c, s in zip(point, (w, h))]]
+                ann['area'] = px(_polygon_area(region['points'], w, h))
+            else:
+                x, y = region['points'][0]
+                ann['keypoints'] = [px(x * w), px(y * h), 2]
+                ann['num_keypoints'] = 1
+                ann['bbox'] = [px(x * w - 1), px(y * h - 1), 2, 2]
+                ann['area'] = 4
+            annotations.append(ann)
+            region_ids[region['id']] = ann_id
+        for rel in task['annotation'].get('relations', []):
+            relations.append({'from': region_ids[rel['from']], 'to': region_ids[rel['to']], 'key': rel['key'], 'image_id': task['id']})
+    return {'info': {'description': snapshot.get('project'), 'release': release.name, 'schema_version': snapshot.get('schema_version'),
+                     'source_format': 'annotation-studio/v1', 'date_created': release.created_at.isoformat()},
+            'images': images, 'annotations': annotations, 'categories': categories, 'relations': relations}
+
+
+@login_required
+def release_coco(request, pk):
+    release = get_object_or_404(Release, pk=pk, project__workspace__membership__user=request.user)
+    response = JsonResponse(snapshot_to_coco(release.snapshot, release), json_dumps_params={'indent': 2})
+    response['Content-Disposition'] = f'attachment; filename="release-{release.pk}-coco.json"'
     response['Cache-Control'] = 'private, no-store'
     return response

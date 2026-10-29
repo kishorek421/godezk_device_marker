@@ -53,6 +53,7 @@ until reload.
 | Create release | `POST /projects/<id>/releases/` | ✓ | ✓ | |
 | View pages/assets | `GET …` | any workspace member | | |
 | Download release | `GET /releases/<uuid>/` | any workspace member | | |
+| Download COCO export | `GET /releases/<uuid>/coco/` | any workspace member | | |
 
 ## Audit events
 

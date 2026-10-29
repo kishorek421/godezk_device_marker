@@ -142,3 +142,21 @@ polygon 3–500 points.
 Only `approved` tasks are included. Downloaded verbatim as
 `release-<uuid>.json` (indented). Denormalized pixel coordinates =
 `normalized × width|height`.
+
+## 4. COCO export (`/releases/<uuid>/coco/`)
+
+On-the-fly transformation of the snapshot (pixel coordinates, rounded to
+2 decimals):
+
+- `categories[]` — `{id: <1-based seq>, name, supercategory: label.key}`
+- `images[]` — `{id: task_id, file_name, width, height}`
+- `annotations[]` — sequential `id`, `image_id`, `category_id`,
+  `iscrowd: 0`, `attributes` (passthrough), plus `region_id`/`region_type`
+  extension fields:
+  - box → `bbox [x, y, w, h]`, `area`
+  - polygon → `segmentation [[x0,y0,...]]`, shoelace `area`
+  - point → `keypoints [x, y, 2]`, `num_keypoints: 1`, 2px `bbox`/`area`
+- `relations[]` — extension array `{from, to, key, image_id}` with
+  region ids translated to annotation ids
+- `info` — project name, release name, schema_version,
+  `source_format: annotation-studio/v1`, `date_created`

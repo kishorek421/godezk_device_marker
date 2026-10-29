@@ -53,16 +53,20 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 - AC31 Snapshot contains labels, approved tasks+annotations, provenance. ✅
 - AC32 Snapshot immutable: label rename post-release doesn't alter it. ✅
 - AC33 Download = `release-<uuid>.json`, members only. ✅
-- **AC34 (G3)** COCO export available alongside v1 JSON. ❌ Phase 2
+- AC34 COCO export available alongside v1 JSON (`/releases/<id>/coco/`):
+  box→bbox, polygon→segmentation, point→keypoints, labels→categories,
+  relations→extension field, pixel coords denormalized. ✅
 
 ## Editor UX
 
-- AC35 Autosave every 5 s when dirty; Ctrl+S; status line reflects state. 🟡
-- AC36 localStorage crash recovery offered when revision matches. 🟡
-- AC37 Conflict ⇒ saving blocked until reload; work kept locally. 🟡
+- AC35 Autosave every 5 s when dirty — browser-verified. ✅
+- AC36 localStorage crash recovery restores unsaved work after reload —
+  browser-verified. ✅
+- AC37 Revision conflict ⇒ 409, save blocked, work kept locally —
+  browser-verified. ✅
 - AC38 Draw box/polygon/point, undo/redo, attributes, relations,
-  save→reload persistence, submit lock — Playwright e2e
-  (`test_browser.py`). ✅ (drag-move/zoom/hotkeys untested)
+  save→reload persistence, submit lock — Playwright e2e. ✅
+  (box resize handles, spacebar pan, zoom untested)
 - AC39 `beforeunload` warning while dirty. 🟡
 
 ## Non-functional
@@ -70,13 +74,15 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 - AC40 Audit `Event` written for every mutation w/ actor+payload. 🟡
 - AC41 SQLite default, Postgres via env vars — no code change. 🟡
 - AC42 DEBUG=0 ⇒ secret-key required, secure cookies, SSL redirect, HSTS. 🟡
-- **AC43 (G2)** Queue pagination beyond 200 items. ❌ Phase 2
+- AC43 Queue paginated at 50/page, filters preserved across pages. ✅
+- AC44 Submit shows validation warnings (empty regions/attributes)
+  before confirming. 🟡
 
-## Phase 0 gaps → backlog
+## Gap backlog
 
-| ID | Gap | Target |
+| ID | Gap | Status |
 |---|---|---|
-| ~~G1~~ | ~~Attribute `options`~~ — done in Phase 1 | ✅ |
-| G2 | Task queue pagination / bulk ops | Phase 2 |
-| G3 | COCO export | Phase 2 |
-| G4 | Browser tests for autosave, recovery, conflict path, beforeunload (AC35–37, 39) | Phase 2 |
+| G1 | Attribute `options` | ✅ Phase 1 |
+| G2 | Task queue pagination / bulk ops | ✅ Phase 2 (pagination; bulk ops open) |
+| G3 | COCO export | ✅ Phase 2 |
+| G4 | Browser tests for autosave, recovery, conflict | ✅ Phase 2 (beforeunload manual) |

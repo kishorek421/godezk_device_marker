@@ -75,6 +75,9 @@ main{max-width:1530px;margin:0 auto;padding:42px 3.2%;min-height:85vh}
 .filters select{width:170px}
 .filters button{margin:0}
 .tablewrap{overflow:auto}
+.pagination{display:flex;gap:16px;justify-content:center;align-items:center;padding:16px 0 4px;font-size:12px}
+.pagination a{color:var(--primary);font-weight:600}
+.pagination span{color:#8a91a1}
 table{border-collapse:collapse;width:100%;text-align:left;font-size:12px}
 th{font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:hsl(176 10% 45%);background:var(--primary-10);font-weight:600;padding:12px}
 td{padding:17px 12px;border-bottom:1px solid #f0f1f5}

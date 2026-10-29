@@ -43,9 +43,9 @@ ASCII layouts matching the shipped templates (`studio/templates/`).
 │ ├──────────────────────────────────────────┤ │ │ key/name/color/ │ │
 │ │ img_0043.png                             │ │ │ attributes form │ │
 │ │ [Submitted]   worker1            [Open]  │ │ └─────────────────┘ │
-│ │ …up to 200 rows                          │ │ MEMBERS (+ add)    │
+│ │ …                                          │ │ MEMBERS (+ add)    │
 │ └──────────────────────────────────────────┘ │ UPLOAD (file pick) │
-│                                              │ RELEASES (+ create)│
+│        ← Prev   Page 1 of 4   Next →         │ RELEASES (+ create)│
 │                                              │ ACTIVITY (events)  │
 └──────────────────────────────────────────────┴─────────────────────┘
 ```
@@ -82,11 +82,15 @@ Editor behavior contract:
 
 - Tools: Select (V), Box (B), Polygon (P), Point (K); Esc cancels a
   draft polygon, Enter/double-click finishes it.
-- Select tool: click to select, drag to move (clamped to bounds).
+- Select tool: click to select, drag to move (clamped to bounds);
+  selected boxes show 4 corner resize handles.
+- Pan: native scroll when zoomed, or hold Space + drag.
 - Undo/redo stack (80 deep): Ctrl+Z / Ctrl+Shift+Z.
 - Save: Ctrl+S, explicit button, and autosave every 5 s when dirty;
   optimistic-lock revision, conflict ⇒ block + reload prompt.
 - Unsaved work survives a crash via localStorage recovery keyed by
   `godezk-marker:<task_id>` + revision.
 - `beforeunload` guard while dirty/saving.
-- Submit requires confirmation; after submit the task locks.
+- Submit shows validation warnings (no regions / empty declared
+  attributes) then confirms; after submit the task locks.
+- Releases list exposes both JSON and COCO download links.

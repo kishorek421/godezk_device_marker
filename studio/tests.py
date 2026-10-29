@@ -190,6 +190,39 @@ class WorkflowTests(TestCase):
         self.assertEqual(response['Cache-Control'], 'private, no-store')
         response.close()
 
+    def test_coco_export(self):
+        task = self.upload()
+        self.post(f'/tasks/{task.pk}/assign/', {'user': self.worker.pk, 'revision': 0})
+        self.client.force_login(self.worker)
+        self.post(f'/tasks/{task.pk}/save/', {'revision': 1, 'annotation': self.annotation(), 'submit': True})
+        self.client.force_login(self.reviewer)
+        self.post(f'/tasks/{task.pk}/review/', {'revision': 2, 'decision': 'approved', 'note': 'ok'})
+        self.post(f'/projects/{self.project.pk}/releases/', {'name': 'v1'})
+        release = Release.objects.get()
+        response = self.client.get(f'/releases/{release.pk}/coco/')
+        self.assertIn('coco', response['Content-Disposition'])
+        coco = response.json()
+        self.assertEqual(coco['images'], [{'id': task.pk, 'file_name': 'sample.png', 'width': 120, 'height': 80}])
+        self.assertEqual(coco['categories'], [{'id': 1, 'name': 'Switch', 'supercategory': 'switch'}])
+        box = next(a for a in coco['annotations'] if a['region_type'] == 'box')
+        point = next(a for a in coco['annotations'] if a['region_type'] == 'point')
+        self.assertEqual(box['bbox'], [12, 8, 36, 40])
+        self.assertEqual(box['area'], 1440)
+        self.assertEqual(point['keypoints'], [96, 56, 2])
+        self.assertEqual(box['attributes'], {'state': 'on'})
+        self.assertEqual(coco['relations'], [{'from': box['id'], 'to': point['id'], 'key': 'controls', 'image_id': task.pk}])
+        self.assertEqual(coco['info']['source_format'], 'annotation-studio/v1')
+
+    def test_queue_pagination(self):
+        for i in range(60):
+            Task.objects.create(project=self.project, filename=f'img{i:03}.jpg', digest=f'd{i:03}', width=10, height=10, image='x.jpg')
+        self.assertContains(self.client.get(f'/projects/{self.project.pk}/'), 'Page 1 of 2')
+        page2 = self.client.get(f'/projects/{self.project.pk}/?page=2')
+        self.assertContains(page2, 'img050')
+        self.assertNotContains(page2, 'img000')
+        filtered = self.client.get(f'/projects/{self.project.pk}/?q=img05&page=1')
+        self.assertContains(filtered, '10 items')
+
     def test_empty_release_and_bad_json(self):
         self.assertEqual(self.post(f'/projects/{self.project.pk}/releases/', {'name': 'empty'}).status_code, 400)
         self.assertEqual(self.client.post('/workspaces/create/', '{bad', content_type='application/json').status_code, 400)
@@ -231,6 +264,7 @@ class IsolationTests(TestCase):
             f'/tasks/{self.task.pk}/',
             f'/tasks/{self.task.pk}/asset/',
             f'/releases/{self.release.pk}/',
+            f'/releases/{self.release.pk}/coco/',
         ])
         self.assertTrue(all(code == 404 for code in statuses.values()), statuses)
 

@@ -5,7 +5,9 @@
   let doc = structuredClone(config.annotation);
   doc.regions ||= []; doc.relations ||= [];
   let selected = null, tool = 'select', start = null, draft = [], dirty = false, saving = false, blocked = false;
-  let undo = [], redo = [], zoom = 1, generation = 0, drag = null;
+  let undo = [], redo = [], zoom = 1, generation = 0, drag = null, resize = null;
+  let panning = false, panOrigin = null;
+  const scroller = $('canvas-scroll');
   const storageKey = `godezk-marker:${config.id}`;
   const labels = new Map(config.labels.map(label => [label.id, label]));
   const status = message => $('save-status').textContent = message;
@@ -43,6 +45,15 @@
     if (!preview) {
       const text = element('text', {x: points[0][0] * 1000 + 5, y: Math.max(18, points[0][1] * 1000 - 7), fill: color, 'font-size': 18, 'pointer-events': 'none'});
       text.textContent = labels.get(region.label)?.name || 'Unknown'; svg.appendChild(text);
+    }
+    if (!preview && config.editable && selected === region.id && region.type === 'box') {
+      const xs = [points[0][0], points[1][0]], ys = [points[0][1], points[1][1]];
+      [[0, 0], [1, 0], [1, 1], [0, 1]].forEach(([xi, yi], i) => {
+        const handle = element('rect', {x: xs[xi] * 1000 - 7, y: ys[yi] * 1000 - 7, width: 14, height: 14, fill: '#ffffff', stroke: color, 'stroke-width': 2, 'vector-effect': 'non-scaling-stroke'});
+        handle.dataset.handle = i; handle.dataset.region = region.id;
+        handle.style.cursor = i % 2 ? 'nesw-resize' : 'nwse-resize';
+        svg.appendChild(handle);
+      });
     }
   }
   function render() {
@@ -104,15 +115,31 @@
   }
   svg.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
+    if (panning) { panOrigin = {x: event.clientX, y: event.clientY, left: scroller.scrollLeft, top: scroller.scrollTop}; svg.setPointerCapture(event.pointerId); return; }
     if (tool === 'select') {
       selected = event.target.dataset.region || null;
-      if (selected && config.editable) { checkpoint(); drag = {point: position(event), original: structuredClone(doc.regions.find(r => r.id === selected).points)}; svg.setPointerCapture(event.pointerId); }
+      if (selected && config.editable) {
+        checkpoint();
+        const region = doc.regions.find(r => r.id === selected);
+        if (event.target.dataset.handle !== undefined) resize = {corner: +event.target.dataset.handle, original: structuredClone(region.points)};
+        else drag = {point: position(event), original: structuredClone(region.points)};
+        svg.setPointerCapture(event.pointerId);
+      }
       render(); return;
     }
     if (!config.editable) return;
     if (tool === 'box') { start = position(event); svg.setPointerCapture(event.pointerId); }
   });
   svg.addEventListener('pointermove', event => {
+    if (panOrigin) { scroller.scrollLeft = panOrigin.left - (event.clientX - panOrigin.x); scroller.scrollTop = panOrigin.top - (event.clientY - panOrigin.y); return; }
+    if (resize) {
+      const p = position(event), region = doc.regions.find(r => r.id === selected);
+      const xs = [resize.original[0][0], resize.original[1][0]], ys = [resize.original[0][1], resize.original[1][1]];
+      xs[resize.corner === 1 || resize.corner === 2 ? 1 : 0] = p[0];
+      ys[resize.corner >= 2 ? 1 : 0] = p[1];
+      region.points = [[Math.min(xs[0], xs[1]), Math.min(ys[0], ys[1])], [Math.max(xs[0], xs[1]), Math.max(ys[0], ys[1])]];
+      render(); return;
+    }
     if (drag) {
       const now = position(event), xs = drag.original.map(p => p[0]), ys = drag.original.map(p => p[1]);
       const dx = Math.max(-Math.min(...xs), Math.min(1 - Math.max(...xs), now[0] - drag.point[0]));
@@ -125,13 +152,19 @@
     }
   });
   svg.addEventListener('pointerup', event => {
+    panOrigin = null;
+    if (resize) {
+      const region = doc.regions.find(r => r.id === selected), was = resize; resize = null;
+      if (Math.abs(region.points[1][0] - region.points[0][0]) < .002 || Math.abs(region.points[1][1] - region.points[0][1]) < .002) region.points = was.original;
+      if (JSON.stringify(region.points) === JSON.stringify(was.original)) render(); else changed();
+    }
     if (drag) { drag = null; changed(); }
     if (!start) return;
     const p = position(event), first = start; start = null;
     if (Math.abs(p[0] - first[0]) < .002 || Math.abs(p[1] - first[1]) < .002) return render();
     add('box', [[Math.min(first[0], p[0]), Math.min(first[1], p[1])], [Math.max(first[0], p[0]), Math.max(first[1], p[1])]]);
   });
-  svg.addEventListener('pointercancel', () => { start = null; if (drag) { doc.regions.find(r => r.id === selected).points = drag.original; drag = null; } render(); });
+  svg.addEventListener('pointercancel', () => { start = null; panOrigin = null; if (resize) { doc.regions.find(r => r.id === selected).points = resize.original; resize = null; } if (drag) { doc.regions.find(r => r.id === selected).points = drag.original; drag = null; } render(); });
   svg.addEventListener('click', event => {
     if (!config.editable) return;
     if (tool === 'point') add('point', [position(event)]);
@@ -173,17 +206,30 @@
     } finally { saving = false; if ($('submit')) $('submit').disabled = false; }
   }
   if ($('save')) $('save').onclick = () => save();
-  if ($('submit')) $('submit').onclick = () => { if (confirm('Submit this annotation for independent review?')) save(true); };
+  if ($('submit')) $('submit').onclick = () => {
+    const issues = [];
+    if (!doc.regions.length) issues.push('No regions drawn');
+    doc.regions.forEach((r, i) => {
+      const missing = (labels.get(r.label)?.attributes || []).map(a => typeof a === 'string' ? a : a.key).filter(k => !(r.attributes?.[k] || '').trim());
+      if (missing.length) issues.push(`Region ${i + 1}: empty ${missing.join(', ')}`);
+    });
+    const message = issues.length ? `Warnings:\n${issues.slice(0, 10).join('\n')}${issues.length > 10 ? '\n…' : ''}\n\nSubmit anyway?` : 'Submit this annotation for independent review?';
+    if (confirm(message)) save(true);
+  };
   setInterval(() => { if (dirty && !drag && !draft.length) save(); }, 5000);
   window.addEventListener('beforeunload', event => { if (dirty || saving) { event.preventDefault(); event.returnValue = ''; } });
   document.addEventListener('keydown', event => {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+    if (event.key === ' ') { event.preventDefault(); if (!panning) { panning = true; svg.style.cursor = 'grab'; } return; }
     if ((event.ctrlKey || event.metaKey) && event.key === 's') { event.preventDefault(); save(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key === 'z') { event.preventDefault(); (event.shiftKey ? $('redo') : $('undo')).click(); return; }
     if (event.key === 'Escape') { draft = []; start = null; render(); }
     if (event.key === 'Enter' && tool === 'polygon') finishPolygon();
     if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); $('delete-region').click(); }
     const shortcuts = {v: 'select', b: 'box', p: 'polygon', k: 'point'}; if (shortcuts[event.key]) setTool(shortcuts[event.key]);
+  });
+  document.addEventListener('keyup', event => {
+    if (event.key === ' ') { panning = false; panOrigin = null; svg.style.cursor = tool === 'select' ? 'default' : 'crosshair'; }
   });
   render();
 })();

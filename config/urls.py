@@ -35,4 +35,5 @@ urlpatterns = [
     path('tasks/<int:pk>/assign/', views.assign),
     path('tasks/<int:pk>/review/', views.review),
     path('releases/<uuid:pk>/', views.release_download),
+    path('releases/<uuid:pk>/coco/', views.release_coco),
 ]
