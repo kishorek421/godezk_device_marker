@@ -34,7 +34,7 @@
   function shape(region, preview = false) {
     const color = labels.get(region.label)?.color || '#ffffff';
     const points = region.points;
-    const common = {fill: `${color}22`, stroke: color, 'stroke-width': selected === region.id ? 4 : 2, 'vector-effect': 'non-scaling-stroke'};
+    const common = {fill: selected === region.id ? `${color}55` : `${color}22`, stroke: color, 'stroke-width': selected === region.id ? 5 : 2, 'vector-effect': 'non-scaling-stroke'};
     let node;
     if (region.type === 'box') node = element('rect', {...common, x: points[0][0] * 1000, y: points[0][1] * 1000, width: (points[1][0] - points[0][0]) * 1000, height: (points[1][1] - points[0][1]) * 1000});
     else if (region.type === 'point') node = element('ellipse', {...common, cx: points[0][0] * 1000, cy: points[0][1] * 1000, rx: 7, ry: 7});
@@ -62,10 +62,22 @@
     $('region-count').textContent = doc.regions.length;
     $('regions').replaceChildren();
     doc.regions.forEach((r, i) => {
+      const row = document.createElement('div'); row.className = 'region-row';
       const button = document.createElement('button'); button.className = `region-item ${selected === r.id ? 'selected' : ''}`;
-      button.textContent = `${i + 1}. ${labels.get(r.label)?.name || 'Unknown'} · ${r.type}`;
-      button.onclick = () => { selected = r.id; render(); }; $('regions').appendChild(button);
+      const dot = document.createElement('span'); dot.className = 'region-dot'; dot.style.background = labels.get(r.label)?.color || '#ffffff';
+      button.appendChild(dot);
+      button.appendChild(document.createTextNode(`${i + 1}. ${labels.get(r.label)?.name || 'Unknown'} · ${r.type}`));
+      button.onclick = () => { selected = r.id; render(); };
+      row.appendChild(button);
+      if (config.editable) {
+        const del = document.createElement('button'); del.className = 'region-del'; del.type = 'button'; del.textContent = '✕'; del.title = `Delete region ${i + 1}`;
+        del.onclick = () => { checkpoint(); doc.regions = doc.regions.filter(x => x.id !== r.id); doc.relations = doc.relations.filter(x => x.from !== r.id && x.to !== r.id); if (selected === r.id) selected = null; changed(); };
+        row.appendChild(del);
+      }
+      $('regions').appendChild(row);
     });
+    const current = document.querySelector('.region-item.selected');
+    if (current) current.scrollIntoView({block: 'nearest'});
     const attrs = $('attributes'); attrs.replaceChildren();
     const region = doc.regions.find(r => r.id === selected);
     if (region) {

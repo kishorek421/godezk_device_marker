@@ -130,6 +130,18 @@ class WorkflowTests(TestCase):
         self.client.force_login(self.owner)
         self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 2, 'annotation': self.annotation(), 'submit': True}).status_code, 200)
 
+    def test_editor_prev_next_navigation(self):
+        for i in range(3):
+            Task.objects.create(project=self.project, filename=f'n{i}.jpg', digest=f'nav{i}', width=10, height=10, image='x.jpg')
+        ids = list(self.project.tasks.values_list('id', flat=True).order_by('id'))
+        middle = ids[1]
+        html = self.client.get(f'/tasks/{middle}/').content.decode()
+        self.assertIn(f'/tasks/{ids[0]}/', html)
+        self.assertIn(f'/tasks/{ids[2]}/', html)
+        self.assertIn('2/3', html)
+        first = self.client.get(f'/tasks/{ids[0]}/').content.decode()
+        self.assertNotIn('← Prev', first)
+
     def test_upload_with_assignee(self):
         result = self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image(), 'assign_to': self.worker.pk})
         self.assertEqual(result.status_code, 200, result.content)

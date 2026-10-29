@@ -230,7 +230,12 @@ def editor(request, pk):
     labels = list(t.project.labels.filter(archived=False).values('id', 'key', 'name', 'color', 'attributes'))
     editable = t.state in ['open', 'in_progress', 'changes_requested'] and (t.assignee_id == request.user.pk or m.role == 'owner')
     data = {'id': t.pk, 'revision': t.revision, 'annotation': t.annotation, 'labels': labels, 'editable': editable, 'state': t.state}
-    return render(request, 'studio/editor.html', {'task': t, 'membership': m, 'editor_data': data, 'editable': editable, 'events': t.event_set.select_related('actor').order_by('-id')[:20]})
+    siblings = list(t.project.tasks.values_list('id', flat=True).order_by('id'))
+    index = siblings.index(t.pk)
+    nav = {'prev_id': siblings[index - 1] if index else None,
+           'next_id': siblings[index + 1] if index + 1 < len(siblings) else None,
+           'position': index + 1, 'total': len(siblings)}
+    return render(request, 'studio/editor.html', {'task': t, 'membership': m, 'editor_data': data, 'editable': editable, 'nav': nav, 'events': t.event_set.select_related('actor').order_by('-id')[:20]})
 
 
 def validate_annotation(value, project):
