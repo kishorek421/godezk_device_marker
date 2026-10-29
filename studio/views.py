@@ -48,6 +48,8 @@ def api(fn):
 
 
 def member(request, workspace_id, roles=None):
+    if request.user.is_superuser:
+        return Membership(workspace_id=workspace_id, user=request.user, role='owner')
     m = get_object_or_404(Membership, user=request.user, workspace_id=workspace_id)
     if roles and m.role not in roles:
         raise Invalid('Your role cannot perform this action')
@@ -55,12 +57,18 @@ def member(request, workspace_id, roles=None):
 
 
 def project_access(request, pk, roles=None):
-    p = get_object_or_404(Project, pk=pk, workspace__membership__user=request.user)
+    if request.user.is_superuser:
+        p = get_object_or_404(Project, pk=pk)
+    else:
+        p = get_object_or_404(Project, pk=pk, workspace__membership__user=request.user)
     return p, member(request, p.workspace_id, roles)
 
 
 def task_access(request, pk):
-    t = get_object_or_404(Task.objects.select_related('project'), pk=pk, project__workspace__membership__user=request.user)
+    if request.user.is_superuser:
+        t = get_object_or_404(Task.objects.select_related('project'), pk=pk)
+    else:
+        t = get_object_or_404(Task.objects.select_related('project'), pk=pk, project__workspace__membership__user=request.user)
     return t, member(request, t.project.workspace_id)
 
 
@@ -77,8 +85,12 @@ def event(request, project, action, task=None, payload=None):
 
 @login_required
 def home(request):
-    memberships = Membership.objects.filter(user=request.user).select_related('workspace')
-    projects = Project.objects.filter(workspace__membership__user=request.user).select_related('workspace').order_by('-created_at')
+    if request.user.is_superuser:
+        memberships = [Membership(workspace=w, user=request.user, role='owner') for w in Workspace.objects.all()]
+        projects = Project.objects.select_related('workspace').order_by('-created_at')
+    else:
+        memberships = Membership.objects.filter(user=request.user).select_related('workspace')
+        projects = Project.objects.filter(workspace__membership__user=request.user).select_related('workspace').order_by('-created_at')
     return render(request, 'studio/home.html', {'memberships': memberships, 'projects': projects})
 
 
@@ -353,9 +365,15 @@ def release_create(request, pk):
     return JsonResponse({'reload': True})
 
 
+def _release(request, pk):
+    if request.user.is_superuser:
+        return get_object_or_404(Release, pk=pk)
+    return get_object_or_404(Release, pk=pk, project__workspace__membership__user=request.user)
+
+
 @login_required
 def release_download(request, pk):
-    release = get_object_or_404(Release, pk=pk, project__workspace__membership__user=request.user)
+    release = _release(request, pk)
     response = JsonResponse(release.snapshot, json_dumps_params={'indent': 2})
     response['Content-Disposition'] = f'attachment; filename="release-{release.pk}.json"'
     response['Cache-Control'] = 'private, no-store'
@@ -377,10 +395,10 @@ def snapshot_to_coco(snapshot, release):
     images, annotations, relations = [], [], []
     ann_id = 0
     for task in snapshot.get('tasks', []):
-        w, h = task['width'], task['height']
+        w, h = task.get('width', 0), task.get('height', 0)
         images.append({'id': task['id'], 'file_name': task['filename'], 'width': w, 'height': h})
         region_ids = {}
-        for region in task['annotation'].get('regions', []):
+        for region in task.get('annotation', {}).get('regions', []):
             ann_id += 1
             ann = {'id': ann_id, 'image_id': task['id'], 'category_id': category_id.get(region['label'], 0),
                    'iscrowd': 0, 'attributes': region.get('attributes', {}), 'region_id': region['id'], 'region_type': region['type']}
@@ -399,7 +417,7 @@ def snapshot_to_coco(snapshot, release):
                 ann['area'] = 4
             annotations.append(ann)
             region_ids[region['id']] = ann_id
-        for rel in task['annotation'].get('relations', []):
+        for rel in task.get('annotation', {}).get('relations', []):
             relations.append({'from': region_ids[rel['from']], 'to': region_ids[rel['to']], 'key': rel['key'], 'image_id': task['id']})
     return {'info': {'description': snapshot.get('project'), 'release': release.name, 'schema_version': snapshot.get('schema_version'),
                      'source_format': 'annotation-studio/v1', 'date_created': release.created_at.isoformat()},
@@ -408,7 +426,7 @@ def snapshot_to_coco(snapshot, release):
 
 @login_required
 def release_coco(request, pk):
-    release = get_object_or_404(Release, pk=pk, project__workspace__membership__user=request.user)
+    release = _release(request, pk)
     response = JsonResponse(snapshot_to_coco(release.snapshot, release), json_dumps_params={'indent': 2})
     response['Content-Disposition'] = f'attachment; filename="release-{release.pk}-coco.json"'
     response['Cache-Control'] = 'private, no-store'

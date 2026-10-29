@@ -280,7 +280,12 @@ class IsolationTests(TestCase):
         self.client.force_login(self.owner)
         self.client.post(f'/projects/{self.project.pk}/upload/', {'images': SimpleUploadedFile('secret.png', buffer.getvalue(), content_type='image/png')})
         self.task = self.project.tasks.get()
-        self.release = Release.objects.create(project=self.project, name='v1', snapshot={'tasks': [{'filename': 'secret.png'}]})
+        self.release = Release.objects.create(project=self.project, name='v1', snapshot={
+            'format': 'annotation-studio/v1', 'project': 'Secret project', 'schema_version': 1,
+            'labels': [{'id': str(self.label.pk), 'key': 'device', 'name': 'Device', 'color': '#206e69', 'attributes': []}],
+            'tasks': [{'id': self.task.pk, 'filename': 'secret.png', 'digest': self.task.digest,
+                       'width': 40, 'height': 30, 'revision': 0, 'annotation': {'regions': [], 'relations': []}}],
+            'provenance': []})
         self.client.force_login(self.outsider)
 
     def get_statuses(self, paths):
@@ -333,6 +338,19 @@ class IsolationTests(TestCase):
     def test_project_page_not_in_foreign_querysets(self):
         self.assertFalse(Project.objects.filter(workspace__membership__user=self.outsider, pk=self.project.pk).exists())
         self.assertFalse(Task.objects.filter(project__workspace__membership__user=self.outsider).exists())
+
+    def test_superuser_has_owner_access_everywhere(self):
+        admin = get_user_model().objects.create_superuser('root', password='Test-root-923!')
+        self.client.force_login(admin)
+        for path in [f'/projects/{self.project.pk}/', f'/tasks/{self.task.pk}/', f'/releases/{self.release.pk}/', f'/releases/{self.release.pk}/coco/']:
+            self.assertEqual(self.client.get(path).status_code, 200, path)
+        asset = self.client.get(f'/tasks/{self.task.pk}/asset/')
+        self.assertEqual(asset.status_code, 200)
+        asset.close()
+        annotation = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'point', 'points': [[.5, .5]], 'attributes': {}}], 'relations': []}
+        response = self.client.post(f'/tasks/{self.task.pk}/save/', json.dumps({'revision': 0, 'annotation': annotation}), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(self.client.get('/'), 'Secret project')
 
     def test_unauthenticated_redirects_everywhere(self):
         self.client.logout()

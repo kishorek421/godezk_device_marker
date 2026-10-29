@@ -54,6 +54,10 @@ until reload.
 | View pages/assets | `GET …` | any workspace member | | |
 | Download release | `GET /releases/<uuid>/` | any workspace member | | |
 | Download COCO export | `GET /releases/<uuid>/coco/` | any workspace member | | |
+| Bulk assign | `POST /projects/<id>/assign/` | ✓ | ✓ | |
+
+> **Superusers** act as `owner` of every workspace — full read/write on
+> all projects, tasks, assets, and releases without a membership row.
 
 ## Audit events
 
