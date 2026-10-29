@@ -190,6 +190,34 @@ class WorkflowTests(TestCase):
         self.assertEqual(response['Cache-Control'], 'private, no-store')
         response.close()
 
+    def test_bulk_assign(self):
+        tasks = [self.upload()]
+        for i in range(2):
+            buffer = io.BytesIO()
+            Image.new('RGB', (60, 40), 'green').save(buffer, 'PNG')
+            tasks.append(Task.objects.create(project=self.project, filename=f'b{i}.png', digest=f'bulk{i}', width=60, height=40, image='x.jpg'))
+        ids = [t.pk for t in tasks]
+        url = f'/projects/{self.project.pk}/assign/'
+        result = self.post(url, {'user': self.worker.pk, 'task_ids': ids})
+        self.assertEqual(result.status_code, 200, result.content)
+        for t in tasks:
+            t.refresh_from_db()
+            self.assertEqual(t.assignee, self.worker)
+            self.assertEqual(t.revision, 1)
+        # Submitted/approved tasks are rejected
+        tasks[0].state = 'submitted'; tasks[0].save()
+        self.assertEqual(self.post(url, {'user': self.reviewer.pk, 'task_ids': ids}).status_code, 400)
+        tasks[0].refresh_from_db(); self.assertEqual(tasks[0].assignee, self.worker)
+        # Foreign project task id rejected
+        other = Project.objects.create(workspace=self.workspace, name='Other')
+        foreign = Task.objects.create(project=other, filename='f.png', digest='f1', width=1, height=1, image='x.jpg')
+        self.assertEqual(self.post(url, {'user': self.worker.pk, 'task_ids': [foreign.pk]}).status_code, 400)
+        # Non-member target rejected
+        self.assertEqual(self.post(url, {'user': self.outsider.pk, 'task_ids': ids[:1]}).status_code, 404)
+        # Annotator callers rejected
+        self.client.force_login(self.worker)
+        self.assertEqual(self.post(url, {'user': self.worker.pk, 'task_ids': ids[:1]}).status_code, 400)
+
     def test_coco_export(self):
         task = self.upload()
         self.post(f'/tasks/{task.pk}/assign/', {'user': self.worker.pk, 'revision': 0})

@@ -280,6 +280,28 @@ def save(request, pk):
 
 @api
 @transaction.atomic
+def bulk_assign(request, pk):
+    p, _ = project_access(request, pk, ['owner', 'reviewer'])
+    target = get_object_or_404(Membership, workspace=p.workspace, user_id=request.data['user'])
+    ids = request.data.get('task_ids')
+    if not isinstance(ids, list) or not 0 < len(ids) <= 200 or any(type(i) is not int for i in ids):
+        raise Invalid('Choose between 1 and 200 tasks')
+    tasks = p.tasks.filter(pk__in=ids)
+    if tasks.count() != len(set(ids)):
+        raise Invalid('Some selected tasks are not in this project')
+    locked = tasks.filter(state__in=['submitted', 'approved']).count()
+    if locked:
+        raise Invalid(f'{locked} selected task(s) are submitted or approved and cannot be reassigned')
+    for t in tasks:
+        t.assignee = target.user
+        t.revision += 1
+        t.save(update_fields=['assignee', 'revision', 'updated_at'])
+        event(request, p, 'task.assigned', t, {'user': target.user.username, 'bulk': True})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
 def assign(request, pk):
     t, m = task_access(request, pk)
     if m.role not in ['owner', 'reviewer']:

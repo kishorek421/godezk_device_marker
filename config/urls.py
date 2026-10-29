@@ -26,6 +26,7 @@ urlpatterns = [
     path('projects/create/', views.project_create),
     path('projects/<int:pk>/', views.project_page),
     path('projects/<int:pk>/members/', views.member_add),
+    path('projects/<int:pk>/assign/', views.bulk_assign),
     path('projects/<int:pk>/labels/', views.label_create),
     path('projects/<int:pk>/upload/', views.upload),
     path('projects/<int:pk>/releases/', views.release_create),
