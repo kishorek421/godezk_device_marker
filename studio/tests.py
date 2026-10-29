@@ -130,6 +130,13 @@ class WorkflowTests(TestCase):
         self.client.force_login(self.owner)
         self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 2, 'annotation': self.annotation(), 'submit': True}).status_code, 200)
 
+    def test_upload_with_assignee(self):
+        result = self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image(), 'assign_to': self.worker.pk})
+        self.assertEqual(result.status_code, 200, result.content)
+        self.assertEqual(self.project.tasks.get().assignee, self.worker)
+        bad = self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image('other.png', 'blue'), 'assign_to': self.outsider.pk})
+        self.assertEqual(bad.status_code, 404)
+
     def test_upload_validation_and_duplicate_detection(self):
         self.upload()
         self.assertEqual(self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image()}).status_code, 400)

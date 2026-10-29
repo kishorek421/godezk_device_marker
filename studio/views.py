@@ -185,6 +185,10 @@ def upload(request, pk):
     files = request.FILES.getlist('images')
     if not files or len(files) > 30:
         raise Invalid('Upload between 1 and 30 images')
+    assignee = None
+    assign_to = request.data.get('assign_to')
+    if assign_to:
+        assignee = get_object_or_404(Membership, workspace=p.workspace, user_id=assign_to).user
     prepared = []
     for f in files:
         if f.size > 20 * 1024 * 1024:
@@ -205,9 +209,9 @@ def upload(request, pk):
             raise Invalid(f'Duplicate image: {f.name}')
         prepared.append((digest, f.name[:255], width, height, output.getvalue()))
     for digest, name, width, height, content in prepared:
-        task = Task(project=p, digest=digest, filename=name, width=width, height=height)
+        task = Task(project=p, digest=digest, filename=name, width=width, height=height, assignee=assignee)
         task.image.save(f'{digest}.jpg', ContentFile(content), save=True)
-        event(request, p, 'task.uploaded', task)
+        event(request, p, 'task.uploaded', task, payload={'assignee': assignee.username} if assignee else {})
     return JsonResponse({'reload': True, 'count': len(prepared)})
 
 
