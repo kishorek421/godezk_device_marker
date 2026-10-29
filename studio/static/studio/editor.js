@@ -59,10 +59,19 @@
     const region = doc.regions.find(r => r.id === selected);
     if (region) {
       const heading = document.createElement('h3'); heading.textContent = 'Region attributes'; attrs.appendChild(heading);
-      for (const key of labels.get(region.label)?.attributes || []) {
-        const label = document.createElement('label'); label.textContent = key;
-        const input = document.createElement('input'); input.value = region.attributes?.[key] || ''; input.disabled = !config.editable; input.maxLength = 1000;
-        input.onchange = () => { checkpoint(); region.attributes ||= {}; region.attributes[key] = input.value; changed(); };
+      for (const attr of labels.get(region.label)?.attributes || []) {
+        const def = typeof attr === 'string' ? {key: attr, options: null} : attr;
+        const label = document.createElement('label'); label.textContent = def.key;
+        let input;
+        if (def.options?.length) {
+          input = document.createElement('select');
+          const empty = document.createElement('option'); empty.value = ''; empty.textContent = '—'; input.appendChild(empty);
+          def.options.forEach(o => { const option = document.createElement('option'); option.value = o; option.textContent = o; input.appendChild(option); });
+        } else {
+          input = document.createElement('input'); input.maxLength = 1000;
+        }
+        input.value = region.attributes?.[def.key] || ''; input.disabled = !config.editable;
+        input.onchange = () => { checkpoint(); region.attributes ||= {}; region.attributes[def.key] = input.value; changed(); };
         label.appendChild(input); attrs.appendChild(label);
       }
     }

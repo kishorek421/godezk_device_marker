@@ -137,6 +137,25 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.client.post(f'/projects/{self.project.pk}/upload/', {'images': bad}).status_code, 400)
         self.assertEqual(self.project.tasks.count(), 1)
 
+    def test_attribute_options_are_enforced(self):
+        lamp = Label.objects.create(project=self.project, key='lamp', name='Lamp', attributes=[
+            {'key': 'state', 'options': ['on', 'off']}, {'key': 'note', 'options': None}])
+        task = self.upload()
+        region = lambda attrs: {'regions': [{'id': 'a', 'label': str(lamp.pk), 'type': 'point', 'points': [[.5, .5]], 'attributes': attrs}], 'relations': []}
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': region({'state': 'on', 'note': 'free text'})}).status_code, 200)
+        task.refresh_from_db()
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': task.revision, 'annotation': region({'state': 'dim'})}).status_code, 400)
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': task.revision, 'annotation': region({'state': 5})}).status_code, 400)
+
+    def test_label_create_with_options_syntax(self):
+        url = f'/projects/{self.project.pk}/labels/'
+        result = self.post(url, {'name': 'Dial', 'key': 'dial', 'color': '#aabbcc', 'attributes': 'mode:auto|manual, comment'})
+        self.assertEqual(result.status_code, 200, result.content)
+        label = self.project.labels.get(key='dial')
+        self.assertEqual(label.attribute_defs(), [{'key': 'mode', 'options': ['auto', 'manual']}, {'key': 'comment', 'options': None}])
+        for i, bad in enumerate(['mode:a|a', 'mode:' + '|'.join(f'o{i}' for i in range(51)), 'a b:x']):
+            self.assertEqual(self.post(url, {'name': 'x', 'key': f'bad{i}', 'attributes': bad}).status_code, 400)
+
     def test_schema_keys_and_version(self):
         url = f'/projects/{self.project.pk}/labels/'
         data = {'name': 'Device', 'key': 'device', 'color': '#aabbcc', 'attributes': 'state, serial'}
@@ -174,3 +193,86 @@ class WorkflowTests(TestCase):
     def test_empty_release_and_bad_json(self):
         self.assertEqual(self.post(f'/projects/{self.project.pk}/releases/', {'name': 'empty'}).status_code, 400)
         self.assertEqual(self.client.post('/workspaces/create/', '{bad', content_type='application/json').status_code, 400)
+
+
+class IsolationTests(TestCase):
+    """Phase 1 exit criterion: a user must never reach another workspace's
+    projects, tasks, assets, annotations, or releases — read or write."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.override = override_settings(MEDIA_ROOT=self.directory.name)
+        self.override.enable()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(self.override.disable)
+        User = get_user_model()
+        self.owner = User.objects.create_user('owner', password='Test-owner-923!')
+        self.outsider = User.objects.create_user('outsider', password='Test-outside-923!')
+        self.workspace = Workspace.objects.create(name='Lab A')
+        self.other_workspace = Workspace.objects.create(name='Lab B')
+        Membership.objects.create(workspace=self.workspace, user=self.owner, role='owner')
+        Membership.objects.create(workspace=self.other_workspace, user=self.outsider, role='owner')
+        self.project = Project.objects.create(workspace=self.workspace, name='Secret project')
+        self.label = Label.objects.create(project=self.project, key='device', name='Device', attributes=[{'key': 'state', 'options': ['on', 'off']}])
+        buffer = io.BytesIO()
+        Image.new('RGB', (40, 30), 'blue').save(buffer, 'PNG')
+        self.client.force_login(self.owner)
+        self.client.post(f'/projects/{self.project.pk}/upload/', {'images': SimpleUploadedFile('secret.png', buffer.getvalue(), content_type='image/png')})
+        self.task = self.project.tasks.get()
+        self.release = Release.objects.create(project=self.project, name='v1', snapshot={'tasks': [{'filename': 'secret.png'}]})
+        self.client.force_login(self.outsider)
+
+    def get_statuses(self, paths):
+        return {path: self.client.get(path).status_code for path in paths}
+
+    def test_no_read_access_to_any_object(self):
+        statuses = self.get_statuses([
+            f'/projects/{self.project.pk}/',
+            f'/tasks/{self.task.pk}/',
+            f'/tasks/{self.task.pk}/asset/',
+            f'/releases/{self.release.pk}/',
+        ])
+        self.assertTrue(all(code == 404 for code in statuses.values()), statuses)
+
+    def test_no_write_access_to_any_endpoint(self):
+        annotation = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'box', 'points': [[.1, .1], [.5, .5]], 'attributes': {}}], 'relations': []}
+        posts = {
+            f'/projects/{self.project.pk}/members/': {'username': 'x', 'role': 'annotator'},
+            f'/projects/{self.project.pk}/labels/': {'name': 'x', 'key': 'x'},
+            f'/projects/{self.project.pk}/releases/': {'name': 'x'},
+            f'/tasks/{self.task.pk}/save/': {'revision': 0, 'annotation': annotation},
+            f'/tasks/{self.task.pk}/assign/': {'user': self.outsider.pk, 'revision': 0},
+            f'/tasks/{self.task.pk}/review/': {'decision': 'approved', 'revision': 0},
+            '/projects/create/': {'workspace': self.workspace.pk, 'name': 'pwned'},
+        }
+        for path, data in posts.items():
+            self.assertEqual(self.client.post(path, json.dumps(data), content_type='application/json').status_code, 404, path)
+        self.assertEqual(Membership.objects.filter(workspace=self.workspace).count(), 1)
+        self.assertEqual(self.project.labels.count(), 1)
+        self.assertEqual(self.project.releases.count(), 1)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.revision, 0)
+        self.assertIsNone(self.task.assignee)
+        self.assertEqual(Project.objects.filter(workspace=self.workspace).count(), 1)
+
+    def test_upload_to_foreign_project_rejected(self):
+        buffer = io.BytesIO()
+        Image.new('RGB', (10, 10), 'red').save(buffer, 'PNG')
+        result = self.client.post(f'/projects/{self.project.pk}/upload/', {'images': SimpleUploadedFile('x.png', buffer.getvalue(), content_type='image/png')})
+        self.assertEqual(result.status_code, 404)
+        self.assertEqual(self.project.tasks.count(), 1)
+
+    def test_home_does_not_leak_foreign_projects(self):
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Secret project')
+        self.assertNotContains(response, 'Lab A')
+
+    def test_project_page_not_in_foreign_querysets(self):
+        self.assertFalse(Project.objects.filter(workspace__membership__user=self.outsider, pk=self.project.pk).exists())
+        self.assertFalse(Task.objects.filter(project__workspace__membership__user=self.outsider).exists())
+
+    def test_unauthenticated_redirects_everywhere(self):
+        self.client.logout()
+        for path in ['/', f'/projects/{self.project.pk}/', f'/tasks/{self.task.pk}/', f'/tasks/{self.task.pk}/asset/', f'/releases/{self.release.pk}/']:
+            self.assertEqual(self.client.get(path).status_code, 302, path)

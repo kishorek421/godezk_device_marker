@@ -140,8 +140,22 @@ def label_create(request, pk):
     if not re.fullmatch(r'[-a-zA-Z0-9_]+', key) or not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
         raise Invalid('Use a slug key and a hexadecimal color')
     raw = request.data.get('attributes', '')
-    attributes = [s.strip() for s in raw.split(',') if s.strip()]
-    if len(attributes) > 20 or any(not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]{0,39}', a) for a in attributes) or len(set(attributes)) != len(attributes):
+    if not isinstance(raw, str):
+        raise Invalid('Attributes must be a comma-separated string')
+    attributes = []
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        attr_key, _, options = part.partition(':')
+        attr_key = attr_key.strip()
+        opts = [o.strip() for o in options.split('|') if o.strip()] if options else None
+        if not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]{0,39}', attr_key):
+            raise Invalid('Attributes must be identifiers')
+        if opts and (len(opts) > 50 or len(set(opts)) != len(opts) or any(len(o) > 200 for o in opts)):
+            raise Invalid('Attribute options must be unique values (up to 50, 200 characters each)')
+        attributes.append({'key': attr_key, 'options': opts})
+    if len(attributes) > 20 or len({a['key'] for a in attributes}) != len(attributes):
         raise Invalid('Attributes must be unique identifiers (up to 20)')
     Label.objects.create(project=p, key=key, name=text(request.data, 'name', 80), color=color, attributes=attributes)
     p.schema_version += 1
@@ -231,8 +245,11 @@ def validate_annotation(value, project):
         if kind == 'box' and (points[0][0] >= points[1][0] or points[0][1] >= points[1][1]):
             raise Invalid('Box must have positive area')
         attrs = r.get('attributes', {})
-        if not isinstance(attrs, dict) or set(attrs) - set(label.attributes) or any(not isinstance(v, str) or len(v) > 1000 for v in attrs.values()):
+        defs = {d['key']: d['options'] for d in label.attribute_defs()}
+        if not isinstance(attrs, dict) or set(attrs) - set(defs) or any(not isinstance(v, str) or len(v) > 1000 for v in attrs.values()):
             raise Invalid('Invalid label attributes')
+        if any(defs[k] is not None and v not in defs[k] for k, v in attrs.items()):
+            raise Invalid('Attribute value is not an allowed option')
     for relation in relations:
         if not isinstance(relation, dict) or set(relation) != {'from', 'to', 'key'} or relation['from'] not in ids or relation['to'] not in ids or relation['from'] == relation['to']:
             raise Invalid('Relationships must connect two existing, distinct regions')

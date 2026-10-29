@@ -40,6 +40,13 @@ class Label(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=['project', 'key'], name='unique_project_key')]
 
+    def attribute_defs(self):
+        return [{'key': a, 'options': None} if isinstance(a, str) else a for a in self.attributes or []]
+
+    @property
+    def attributes_display(self):
+        return ', '.join(d['key'] + (f"({'|'.join(d['options'])})" if d['options'] else '') for d in self.attribute_defs())
+
 
 class Task(models.Model):
     STATES = [('open', 'Open'), ('in_progress', 'In progress'), ('submitted', 'Submitted'), ('approved', 'Approved'), ('changes_requested', 'Changes requested')]

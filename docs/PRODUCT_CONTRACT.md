@@ -65,9 +65,10 @@ Attribute definition (contract):
 - `options` — optional list of allowed string values; absent/empty = free
   text ≤1000 chars.
 
-> **Implementation gap:** storage currently holds attribute keys only and
-> values are free-form. Adding `options` enforcement is Phase 1 work —
-> see ACCEPTANCE_CRITERIA.md G1.
+> Implemented (Phase 1): attributes accept `key` or `key:opt1|opt2`
+> syntax; `options` are enforced server-side and rendered as selects in
+> the editor. Legacy key-only rows are normalized by migration 0002 and
+> at read time.
 
 Adding a label increments `project.schema_version`. Annotations record the
 schema version they were saved against in the audit event.
@@ -176,7 +177,7 @@ Everything above is **decided**. The remaining items are explicitly
 deferred, not open:
 
 - Relation semantics/rules engine → Phase 2+
-- Enumerated attribute options enforcement → Phase 1 (G1)
+- ~~Enumerated attribute options enforcement~~ → done (Phase 1)
 - Queue pagination/bulk ops → Phase 2 (G2)
 - COCO export → Phase 2 (G3)
 - SSO → not planned

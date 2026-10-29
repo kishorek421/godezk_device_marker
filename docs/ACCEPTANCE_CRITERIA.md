@@ -8,7 +8,7 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 - AC2 Label `color` must be `#rrggbb`; `key`/`name` length caps enforced. ✅
 - AC3 Attributes ≤20 unique identifier keys; duplicates rejected. ✅
 - AC4 Creating a label bumps `project.schema_version`. ✅
-- **AC5 (G1)** Attribute *values* honor `options` when declared. ❌ Phase 1
+- AC5 Attribute *values* honor `options` when declared (else free text). ✅
 
 ## Upload pipeline
 
@@ -76,7 +76,7 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 
 | ID | Gap | Target |
 |---|---|---|
-| G1 | Attribute `options` (enumerated values) in label schema + validation | Phase 1 |
+| ~~G1~~ | ~~Attribute `options`~~ — done in Phase 1 | ✅ |
 | G2 | Task queue pagination / bulk ops | Phase 2 |
 | G3 | COCO export | Phase 2 |
 | G4 | Browser tests for autosave, recovery, conflict path, beforeunload (AC35–37, 39) | Phase 2 |
