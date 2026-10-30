@@ -127,6 +127,19 @@ def project_page(request, pk):
 
 @api
 @transaction.atomic
+def geometry_set(request, pk):
+    p, _ = project_access(request, pk, ['owner'])
+    geometry = request.data.get('geometry')
+    if geometry not in dict(Project.GEOMETRIES):
+        raise Invalid('Choose a valid geometry lock')
+    p.geometry = geometry
+    p.save(update_fields=['geometry'])
+    event(request, p, 'project.geometry_changed', payload={'geometry': geometry})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
 def member_add(request, pk):
     p, _ = project_access(request, pk, ['owner'])
     role = request.data.get('role')
@@ -229,12 +242,13 @@ def editor(request, pk):
     t, m = task_access(request, pk)
     labels = list(t.project.labels.filter(archived=False).values('id', 'key', 'name', 'color', 'attributes'))
     editable = t.state in ['open', 'in_progress', 'changes_requested'] and (t.assignee_id == request.user.pk or m.role == 'owner')
-    data = {'id': t.pk, 'revision': t.revision, 'annotation': t.annotation, 'labels': labels, 'editable': editable, 'state': t.state}
     siblings = list(t.project.tasks.values_list('id', flat=True).order_by('id'))
     index = siblings.index(t.pk)
     nav = {'prev_id': siblings[index - 1] if index else None,
            'next_id': siblings[index + 1] if index + 1 < len(siblings) else None,
            'position': index + 1, 'total': len(siblings)}
+    data = {'id': t.pk, 'revision': t.revision, 'annotation': t.annotation, 'labels': labels, 'editable': editable,
+            'state': t.state, 'geometry': t.project.geometry, 'next_id': nav['next_id']}
     return render(request, 'studio/editor.html', {'task': t, 'membership': m, 'editor_data': data, 'editable': editable, 'nav': nav, 'events': t.event_set.select_related('actor').order_by('-id')[:20]})
 
 
@@ -260,6 +274,8 @@ def validate_annotation(value, project):
         kind = r.get('type')
         if kind not in ['box', 'polygon', 'point'] or not isinstance(points, list):
             raise Invalid('Invalid geometry type')
+        if project.geometry != 'any' and kind != project.geometry:
+            raise Invalid(f'This project is locked to {project.geometry} annotations')
         if (kind == 'box' and len(points) != 2) or (kind == 'polygon' and not 3 <= len(points) <= 500) or (kind == 'point' and len(points) != 1):
             raise Invalid('Invalid geometry')
         for point in points:
@@ -287,6 +303,13 @@ def save(request, pk):
     t, m = task_access(request, pk)
     if t.state not in ['open', 'in_progress', 'changes_requested'] or (t.assignee_id != request.user.pk and m.role != 'owner'):
         return JsonResponse({'error': 'Task is not editable by you'}, status=403)
+    if t.project.geometry == 'any':
+        regions = request.data.get('annotation', {})
+        if isinstance(regions, dict) and isinstance(regions.get('regions'), list) and regions['regions']:
+            first = regions['regions'][0]
+            if isinstance(first, dict) and first.get('type') in ['box', 'polygon', 'point']:
+                t.project.geometry = first['type']
+                t.project.save(update_fields=['geometry'])
     annotation = validate_annotation(request.data.get('annotation'), t.project)
     submit = request.data.get('submit') is True
     revision = request.data.get('revision')

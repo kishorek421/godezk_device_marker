@@ -11,6 +11,20 @@
   const storageKey = `godezk-marker:${config.id}`;
   const labels = new Map(config.labels.map(label => [label.id, label]));
   const status = message => $('save-status').textContent = message;
+  function allowedType() {
+    if (config.geometry && config.geometry !== 'any') return config.geometry;
+    return doc.regions[0]?.type || null;
+  }
+  function syncTools() {
+    const allowed = allowedType();
+    document.querySelectorAll('[data-tool]').forEach(b => { b.style.display = allowed && !['select', allowed].includes(b.dataset.tool) ? 'none' : ''; });
+    if (allowed && !['select', allowed].includes(tool)) {
+      tool = 'select'; draft = []; start = null; svg.style.cursor = 'default';
+      document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === 'select'));
+    }
+    const hint = $('editor-hint');
+    if (hint) hint.textContent = config.geometry && config.geometry !== 'any' ? `This project is locked to ${config.geometry} annotations.` : allowed ? `Geometry locked to ${allowed} — delete all regions to change it.` : 'The first region drawn sets this project\'s geometry.';
+  }
   try {
     const cached = JSON.parse(localStorage.getItem(storageKey));
     if (config.editable && cached?.revision === config.revision && JSON.stringify(cached.doc) !== JSON.stringify(doc) && confirm('Recover unsaved annotations from this browser?')) {
@@ -115,12 +129,14 @@
     $('undo').disabled = !config.editable || !undo.length;
     $('redo').disabled = !config.editable || !redo.length;
     $('link').disabled = !config.editable;
+    syncTools();
   }
   function position(event) {
     const rect = svg.getBoundingClientRect();
     return [Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))];
   }
   function add(type, points) {
+    if (allowedType() && type !== allowedType()) return;
     if (!$('label').value) return notify('Create a label key in the project first.', true);
     checkpoint(); const r = {id: crypto.randomUUID(), label: $('label').value, type, points, attributes: {}};
     doc.regions.push(r); selected = r.id; changed();
@@ -184,7 +200,10 @@
   });
   function finishPolygon() { if (draft.length >= 3) { const points = draft; draft = []; add('polygon', points); } }
   svg.addEventListener('dblclick', event => { event.preventDefault(); if (tool === 'polygon') finishPolygon(); });
-  function setTool(value) { tool = value; draft = []; start = null; document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === value)); svg.style.cursor = value === 'select' ? 'default' : 'crosshair'; render(); }
+  function setTool(value) {
+    if (allowedType() && !['select', allowedType()].includes(value)) return;
+    tool = value; draft = []; start = null; document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === value)); svg.style.cursor = value === 'select' ? 'default' : 'crosshair'; render();
+  }
   document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
   $('delete-region').onclick = () => {
     if (!config.editable || !selected) return;
@@ -201,8 +220,8 @@
   function setZoom(value) { zoom = Math.max(1, Math.min(4, value)); $('stage').style.width = `${zoom * 100}%`; $('zoom-level').textContent = `${Math.round(zoom * 100)}%`; }
   $('zoom-in').onclick = () => setZoom(zoom + .25); $('zoom-out').onclick = () => setZoom(zoom - .25);
   async function save(submit = false) {
-    if (saving || blocked || !config.editable || (!dirty && !submit)) return;
-    if (draft.length) return notify('Finish the polygon with Enter, or cancel with Escape.', true);
+    if (saving || blocked || !config.editable || (!dirty && !submit)) return false;
+    if (draft.length) { notify('Finish the polygon with Enter, or cancel with Escape.', true); return false; }
     saving = true; const sentGeneration = generation; status('Saving…');
     if ($('submit')) $('submit').disabled = true;
     try {
@@ -212,12 +231,15 @@
       else cache();
       status(dirty ? 'Unsaved changes' : `Saved · revision ${result.revision}`);
       if (result.submitted) { config.editable = false; location.reload(); }
+      return true;
     } catch (error) {
       status('Save failed · changes kept locally'); notify(error.message, true);
       if (error.message.startsWith('Conflict:')) blocked = true;
+      return false;
     } finally { saving = false; if ($('submit')) $('submit').disabled = false; }
   }
   if ($('save')) $('save').onclick = () => save();
+  if ($('save-next')) $('save-next').onclick = async () => { if (await save()) location.href = `/tasks/${config.next_id}/`; };
   if ($('submit')) $('submit').onclick = () => {
     const issues = [];
     if (!doc.regions.length) issues.push('No regions drawn');

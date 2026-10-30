@@ -99,6 +99,12 @@ region ids, `from`/`to` resolvable + distinct, label exists and is not
 archived, attribute keys ⊆ label's declared keys, box positive area,
 polygon 3–500 points.
 
+**Project geometry lock:** `project.geometry` is `any`, `box`,
+`polygon`, or `point`. While `any`, the first saved annotation locks
+the project to that region type. Afterwards every region's `type` must
+equal the lock (mismatch → 400), so a project never mixes geometry
+flows. An owner may change the lock explicitly.
+
 ## 2. Label schema (ontology)
 
 ```json

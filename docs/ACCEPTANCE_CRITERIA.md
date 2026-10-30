@@ -64,8 +64,8 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
   browser-verified. ✅
 - AC37 Revision conflict ⇒ 409, save blocked, work kept locally —
   browser-verified. ✅
-- AC38 Draw box/polygon/point, undo/redo, attributes, relations,
-  save→reload persistence, submit lock — Playwright e2e. ✅
+- AC38 Draw regions, undo/redo, attributes, relations, save→reload
+  persistence, submit lock — Playwright e2e. ✅
   (box resize handles, spacebar pan, zoom untested)
 - AC39 `beforeunload` warning while dirty. 🟡
 
@@ -77,6 +77,15 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 - AC43 Queue paginated at 50/page, filters preserved across pages. ✅
 - AC44 Submit shows validation warnings (empty regions/attributes)
   before confirming. 🟡
+- AC45 One geometry type per project: first saved annotation locks
+  `project.geometry`; mismatched or mixed saves → 400; a rejected save
+  does not move the lock. ✅
+- AC46 Editor hides incompatible tools (+ shortcuts) once the geometry
+  is known — locked project, or first region drawn on an undecided one —
+  and re-enables them if all regions are deleted. Polygon/point buttons
+  hidden after a box is drawn: e2e-verified. ✅
+- AC47 Owner can set/clear the geometry lock from the project page;
+  non-owner → 400, invalid value → 400. ✅
 
 ## Gap backlog
 

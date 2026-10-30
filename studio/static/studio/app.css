@@ -102,6 +102,9 @@ td strong{font-weight:550}
 .teamrow{justify-content:space-between}
 .teamrow strong{font-weight:500}
 details{margin-top:20px}
+.geometry-lock{display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;padding-bottom:16px;border-bottom:1px solid #f0f1f5}
+.geometry-lock label{margin:0;flex:1}
+.geometry-lock button{margin:0;padding:8px 12px;font-size:11px}
 summary{color:var(--primary);font-size:12px;cursor:pointer;font-weight:600}
 .release{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);font-size:12px}
 .release span{color:var(--primary);font-size:10px;font-weight:600}

@@ -16,7 +16,8 @@ Companion artifacts:
 Godezk Marker is a **self-hosted image annotation platform** for small teams
 building ML datasets. A workspace owner creates projects, defines a label
 ontology, and invites annotators and reviewers. Annotators draw regions
-(boxes, polygons, points) and typed relations on assigned images; a
+(boxes, polygons, points — one geometry type per project, locked by the
+first annotation) and typed relations on assigned images; a
 different reviewer approves or requests changes; approved work is frozen
 into immutable, downloadable JSON releases. Everything is auditable and
 nothing is publicly accessible.

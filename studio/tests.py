@@ -47,7 +47,7 @@ class WorkflowTests(TestCase):
     def annotation(self):
         return {'regions': [
             {'id': 'a', 'label': str(self.label.pk), 'type': 'box', 'points': [[.1, .1], [.4, .6]], 'attributes': {'state': 'on'}},
-            {'id': 'b', 'label': str(self.label.pk), 'type': 'point', 'points': [[.8, .7]], 'attributes': {}}
+            {'id': 'b', 'label': str(self.label.pk), 'type': 'box', 'points': [[.6, .6], [.9, .9]], 'attributes': {}}
         ], 'relations': [{'from': 'a', 'to': 'b', 'key': 'controls'}]}
 
     def test_end_to_end_review_export_and_immutable_snapshot(self):
@@ -117,8 +117,12 @@ class WorkflowTests(TestCase):
 
     def test_polygon_is_supported(self):
         task = self.upload()
-        doc = self.annotation(); doc['regions'][0]['type'] = 'polygon'; doc['regions'][0]['points'] = [[0, 0], [1, 0], [.5, 1]]
+        doc = self.annotation()
+        doc['regions'][0]['type'] = 'polygon'; doc['regions'][0]['points'] = [[0, 0], [1, 0], [.5, 1]]
+        doc['regions'][1]['type'] = 'polygon'; doc['regions'][1]['points'] = [[.2, .2], [.4, .2], [.3, .4]]
         self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': doc}).status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.geometry, 'polygon')
 
     def test_review_rejection_and_resubmission(self):
         task = self.upload()
@@ -129,6 +133,39 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.post(f'/tasks/{task.pk}/review/', {'revision': 1, 'decision': 'changes_requested', 'note': 'Tighten box'}).status_code, 200)
         self.client.force_login(self.owner)
         self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 2, 'annotation': self.annotation(), 'submit': True}).status_code, 200)
+
+    def test_geometry_locks_to_first_saved_type(self):
+        task = self.upload()
+        box = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'box', 'points': [[.1, .1], [.4, .6]], 'attributes': {}}], 'relations': []}
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': box}).status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.geometry, 'box')
+        point = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'point', 'points': [[.5, .5]], 'attributes': {}}], 'relations': []}
+        task.refresh_from_db()
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': task.revision, 'annotation': point}).status_code, 400)
+        # A fresh project still rejects a mixed first annotation
+        other = Project.objects.create(workspace=self.workspace, name='Other')
+        Label.objects.create(project=other, key='l', name='L')
+        t2 = Task.objects.create(project=other, filename='t.png', digest='t1', width=10, height=10, image='x.jpg')
+        mixed = {'regions': [
+            {'id': 'a', 'label': str(other.labels.get().pk), 'type': 'box', 'points': [[.1, .1], [.4, .6]], 'attributes': {}},
+            {'id': 'b', 'label': str(other.labels.get().pk), 'type': 'point', 'points': [[.5, .5]], 'attributes': {}}], 'relations': []}
+        self.assertEqual(self.post(f'/tasks/{t2.pk}/save/', {'revision': 0, 'annotation': mixed}).status_code, 400)
+        other.refresh_from_db()
+        self.assertEqual(other.geometry, 'any')
+
+    def test_owner_can_change_geometry_lock(self):
+        task = self.upload()
+        box = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'box', 'points': [[.1, .1], [.4, .6]], 'attributes': {}}], 'relations': []}
+        self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': box})
+        url = f'/projects/{self.project.pk}/geometry/'
+        self.client.force_login(self.worker)
+        self.assertEqual(self.post(url, {'geometry': 'any'}).status_code, 400)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.post(url, {'geometry': 'bogus'}).status_code, 400)
+        self.assertEqual(self.post(url, {'geometry': 'any'}).status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.geometry, 'any')
 
     def test_editor_prev_next_navigation(self):
         for i in range(3):
@@ -251,14 +288,28 @@ class WorkflowTests(TestCase):
         coco = response.json()
         self.assertEqual(coco['images'], [{'id': task.pk, 'file_name': 'sample.png', 'width': 120, 'height': 80}])
         self.assertEqual(coco['categories'], [{'id': 1, 'name': 'Switch', 'supercategory': 'switch'}])
-        box = next(a for a in coco['annotations'] if a['region_type'] == 'box')
-        point = next(a for a in coco['annotations'] if a['region_type'] == 'point')
+        box = next(a for a in coco['annotations'] if a['region_id'] == 'a')
+        other = next(a for a in coco['annotations'] if a['region_id'] == 'b')
         self.assertEqual(box['bbox'], [12, 8, 36, 40])
         self.assertEqual(box['area'], 1440)
-        self.assertEqual(point['keypoints'], [96, 56, 2])
         self.assertEqual(box['attributes'], {'state': 'on'})
-        self.assertEqual(coco['relations'], [{'from': box['id'], 'to': point['id'], 'key': 'controls', 'image_id': task.pk}])
+        self.assertEqual(coco['relations'], [{'from': box['id'], 'to': other['id'], 'key': 'controls', 'image_id': task.pk}])
         self.assertEqual(coco['info']['source_format'], 'annotation-studio/v1')
+
+    def test_coco_maps_points_and_polygons(self):
+        from studio.views import snapshot_to_coco
+        release = Release.objects.create(project=self.project, name='v', snapshot={})
+        snapshot = {'project': 'P', 'labels': [{'id': 'lab1', 'key': 'k', 'name': 'N'}], 'tasks': [
+            {'id': 7, 'filename': 'f.png', 'width': 100, 'height': 100, 'annotation': {'regions': [
+                {'id': 'p', 'label': 'lab1', 'type': 'point', 'points': [[.5, .5]], 'attributes': {}},
+                {'id': 'g', 'label': 'lab1', 'type': 'polygon', 'points': [[0, 0], [1, 0], [.5, 1]], 'attributes': {}}
+            ], 'relations': []}}]}
+        coco = snapshot_to_coco(snapshot, release)
+        point = next(a for a in coco['annotations'] if a['region_id'] == 'p')
+        self.assertEqual(point['keypoints'], [50, 50, 2])
+        polygon = next(a for a in coco['annotations'] if a['region_id'] == 'g')
+        self.assertEqual(polygon['segmentation'], [[0, 0, 100, 0, 50, 100]])
+        self.assertEqual(polygon['area'], 5000)
 
     def test_queue_pagination(self):
         for i in range(60):

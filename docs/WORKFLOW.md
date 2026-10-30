@@ -30,6 +30,24 @@ Rules enforced server-side:
 - `changes_requested` requires a non-empty note (≤4000 chars).
 - `approved` is terminal — no further edits (409/403).
 
+## Geometry lock
+
+Each project annotates in exactly **one geometry type** — the whole
+project follows a single annotation flow:
+
+- `project.geometry` starts as `any` (undecided). The first saved
+  annotation locks it to that region type; every later save must match
+  or the server returns 400. A mixed-type annotation is always rejected,
+  and a rejected save leaves the lock untouched (atomic rollback).
+- The editor enforces the same rule client-side: once the lock is known —
+  or the first region is drawn on an undecided project — incompatible
+  tools are hidden and their keyboard shortcuts (`B`/`P`/`K`) are
+  inert. Deleting all regions on an undecided project re-opens the
+  choice.
+- An **owner** can change or clear the lock at any time via the
+  "Geometry lock" control on the project page
+  (`POST /projects/<id>/geometry/`).
+
 ## Concurrency contract
 
 Every mutating call carries the caller's seen `revision`. The server
@@ -55,6 +73,7 @@ until reload.
 | Download release | `GET /releases/<uuid>/` | any workspace member | | |
 | Download COCO export | `GET /releases/<uuid>/coco/` | any workspace member | | |
 | Bulk assign | `POST /projects/<id>/assign/` | ✓ | ✓ | |
+| Set geometry lock | `POST /projects/<id>/geometry/` | ✓ | | |
 
 > **Superusers** act as `owner` of every workspace — full read/write on
 > all projects, tasks, assets, and releases without a membership row.
@@ -64,7 +83,7 @@ until reload.
 `project.created` · `member.added` · `schema.label_created` ·
 `task.uploaded` · `task.assigned` · `annotation.saved` ·
 `task.submitted` · `review.approved` · `review.changes_requested` ·
-`release.created`
+`release.created` · `project.geometry_changed`
 
 Each records `project`, `task` (nullable), `actor`, `action`, `payload`,
 `created_at`. Save/submit payloads embed the full annotation +

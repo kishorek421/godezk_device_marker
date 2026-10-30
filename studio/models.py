@@ -21,10 +21,12 @@ class Membership(models.Model):
 
 
 class Project(models.Model):
+    GEOMETRIES = [('any', 'Any'), ('box', 'Box'), ('polygon', 'Polygon'), ('point', 'Point')]
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE)
     name = models.CharField(max_length=160)
     instructions = models.TextField(blank=True)
     schema_version = models.PositiveIntegerField(default=1)
+    geometry = models.CharField(max_length=8, choices=GEOMETRIES, default='any')
     created_at = models.DateTimeField(auto_now_add=True)
 
 
