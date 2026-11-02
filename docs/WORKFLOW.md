@@ -127,6 +127,7 @@ decide a task; the second submission gets 409.
 | Download release | `GET /releases/<uuid>/` | any workspace member | | |
 | Download COCO export | `GET /releases/<uuid>/coco/` | any workspace member | | |
 | Bulk assign | `POST /projects/<id>/assign/` | ✓ | ✓ | |
+| Distribute evenly | `POST /projects/<id>/distribute/` | ✓ | ✓ | |
 | Set geometry lock | `POST /projects/<id>/geometry/` | ✓ | | |
 | Archive/restore label | `POST /projects/<id>/labels/<lid>/archive/` | ✓ | | |
 | Create/revoke API token | `POST /projects/<id>/tokens/…` | ✓ | | |
@@ -144,7 +145,7 @@ decide a task; the second submission gets 409.
 `release.created` · `project.geometry_changed` · `task.comment` ·
 `annotation.restored` · `quality.sampled` · `schema.label_archived` ·
 `schema.label_restored` · `api.token_created` · `api.token_revoked` ·
-`webhook.created` · `webhook.deleted`
+`webhook.created` · `webhook.deleted` · `tasks.distributed`
 
 Each records `project`, `task` (nullable), `actor`, `action`, `payload`,
 `created_at`. Save/submit payloads embed the full annotation +

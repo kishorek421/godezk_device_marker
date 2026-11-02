@@ -27,6 +27,7 @@ urlpatterns = [
     path('projects/<int:pk>/', views.project_page),
     path('projects/<int:pk>/members/', views.member_add),
     path('projects/<int:pk>/assign/', views.bulk_assign),
+    path('projects/<int:pk>/distribute/', views.distribute),
     path('projects/<int:pk>/geometry/', views.geometry_set),
     path('projects/<int:pk>/export/', views.export_zip),
     path('projects/<int:pk>/review-next/', views.review_next),

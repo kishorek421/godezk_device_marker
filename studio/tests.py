@@ -255,6 +255,24 @@ class WorkflowTests(TestCase):
         empty = Project.objects.create(workspace=self.workspace, name='Empty')
         self.assertEqual(self.client.get(f'/projects/{empty.pk}/spot-check/')['Location'], f'/projects/{empty.pk}/')
 
+    def test_distribute_evenly_splits_tasks(self):
+        self.upload()
+        for name, color in [('two.png', 'blue'), ('three.png', 'green'), ('four.png', 'white'), ('five.png', 'black')]:
+            self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image(name, color)})
+        url = f'/projects/{self.project.pk}/distribute/'
+        self.client.force_login(self.worker)
+        self.assertEqual(self.post(url, {'user_ids': [self.worker.pk]}).status_code, 400)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.post(url, {'user_ids': [], 'scope': 'unassigned'}).status_code, 400)
+        self.assertEqual(self.post(url, {'user_ids': [self.worker.pk], 'scope': 'bogus'}).status_code, 400)
+        r = self.post(url, {'user_ids': [self.worker.pk, self.reviewer.pk], 'scope': 'unassigned'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(Task.objects.filter(project=self.project, assignee=self.worker).count(), 3)
+        self.assertEqual(Task.objects.filter(project=self.project, assignee=self.reviewer).count(), 2)
+        self.assertTrue(Event.objects.filter(project=self.project, action='tasks.distributed').exists())
+        r = self.post(url, {'user_ids': [self.worker.pk], 'scope': 'unassigned'})
+        self.assertEqual(r.status_code, 400)
+
     def test_progress_report_on_project_page(self):
         task = self.upload()
         self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation(), 'submit': True})
@@ -557,6 +575,7 @@ class IsolationTests(TestCase):
             f'/tasks/{self.task.pk}/comment/': {'note': 'x'},
             f'/tasks/{self.task.pk}/restore/': {'revision': 0, 'event_id': 1},
             f'/projects/{self.project.pk}/assign/': {'user': self.outsider.pk, 'task_ids': [self.task.pk]},
+            f'/projects/{self.project.pk}/distribute/': {'user_ids': [self.outsider.pk], 'scope': 'all'},
             f'/projects/{self.project.pk}/geometry/': {'geometry': 'box'},
             f'/projects/{self.project.pk}/labels/{self.label.pk}/archive/': {},
             f'/projects/{self.project.pk}/tokens/': {'name': 'x'},

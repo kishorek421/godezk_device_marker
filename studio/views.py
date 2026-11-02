@@ -489,6 +489,35 @@ def bulk_assign(request, pk):
 
 @api
 @transaction.atomic
+def distribute(request, pk):
+    p, _ = project_access(request, pk, ['owner', 'reviewer'])
+    ids = request.data.get('user_ids')
+    if not isinstance(ids, list) or not 0 < len(ids) <= 50 or any(type(i) is not int for i in ids):
+        raise Invalid('Choose between 1 and 50 members')
+    members = list(Membership.objects.filter(workspace=p.workspace, user_id__in=ids).select_related('user'))
+    if len({m.user_id for m in members}) != len(set(ids)):
+        raise Invalid('Some selected members are not in this workspace')
+    scope = request.data.get('scope', 'unassigned')
+    tasks = p.tasks.exclude(state__in=['submitted', 'approved'])
+    if scope == 'unassigned':
+        tasks = tasks.filter(assignee__isnull=True)
+    elif scope != 'all':
+        raise Invalid('Invalid distribution scope')
+    tasks = list(tasks.order_by('id'))
+    if not tasks:
+        raise Invalid('Nothing to distribute')
+    now = timezone.now()
+    for i, t in enumerate(tasks):
+        t.assignee = members[i % len(members)].user
+        t.revision += 1
+        t.updated_at = now
+    Task.objects.bulk_update(tasks, ['assignee', 'revision', 'updated_at'])
+    event(request, p, 'tasks.distributed', payload={'users': [m.user.username for m in members], 'count': len(tasks), 'scope': scope})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
 def assign(request, pk):
     t, m = task_access(request, pk)
     if m.role not in ['owner', 'reviewer']:

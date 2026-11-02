@@ -78,7 +78,9 @@ main{max-width:1530px;margin:0 auto;padding:42px 3.2%;min-height:85vh}
 .pagination{display:flex;gap:16px;justify-content:center;align-items:center;padding:16px 0 4px;font-size:12px}
 .pagination a{color:var(--primary);font-weight:600}
 .pagination span{color:#8a91a1}
-.bulkbar{display:flex;gap:12px;align-items:center;margin-bottom:14px;font-size:12px}
+.bulkbar{display:flex;gap:12px;align-items:center;margin-bottom:14px;font-size:12px;flex-wrap:wrap}
+.bulkbar .check{display:flex;align-items:center;gap:4px;margin:0;font-weight:400;color:inherit}
+.bulkbar .check input{margin:0}
 .bulkbar select{width:auto;font-size:11px;padding:8px}
 .bulkbar button{margin:0;padding:8px 12px}
 input[type=checkbox]{width:auto;display:inline-block;accent-color:var(--primary)}
