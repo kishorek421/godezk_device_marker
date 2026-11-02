@@ -211,6 +211,58 @@ class WorkflowTests(TestCase):
         empty = Project.objects.create(workspace=self.workspace, name='Empty')
         self.assertEqual(self.client.get(f'/projects/{empty.pk}/export/').status_code, 400)
 
+    def test_task_comments_and_history_restore(self):
+        task = self.upload()
+        self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation()})
+        task.refresh_from_db()
+        smaller = {'regions': [self.annotation()['regions'][0]], 'relations': []}
+        self.post(f'/tasks/{task.pk}/save/', {'revision': task.revision, 'annotation': smaller})
+        self.client.force_login(self.worker)
+        self.assertEqual(self.post(f'/tasks/{task.pk}/comment/', {'note': 'Second box is blurry'}).status_code, 200)
+        self.assertTrue(Event.objects.filter(task=task, action='task.comment').exists())
+        task.refresh_from_db()
+        self.assertEqual(self.post(f'/tasks/{task.pk}/restore/', {'revision': task.revision, 'event_id': 1}).status_code, 403)
+        self.client.force_login(self.owner)
+        source = Event.objects.filter(task=task, action='annotation.saved').order_by('id').first()
+        self.assertEqual(self.post(f'/tasks/{task.pk}/restore/', {'revision': task.revision, 'event_id': source.pk}).status_code, 200)
+        task.refresh_from_db()
+        self.assertEqual(len(task.annotation['regions']), 2)
+        self.assertEqual(self.post(f'/tasks/{task.pk}/restore/', {'revision': task.revision - 1, 'event_id': source.pk}).status_code, 409)
+
+    def test_review_queue_auto_advances_and_spot_check(self):
+        t1 = self.upload()
+        self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image('two.png', 'blue')})
+        t2 = self.project.tasks.order_by('id').last()
+        for t in (t1, t2):
+            self.post(f'/tasks/{t.pk}/save/', {'revision': 0, 'annotation': self.annotation(), 'submit': True})
+        url = f'/projects/{self.project.pk}/review-next/'
+        self.client.force_login(self.worker)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.client.force_login(self.reviewer)
+        self.assertEqual(self.client.get(url)['Location'], f'/tasks/{t1.pk}/')
+        t1.refresh_from_db()
+        r = self.post(f'/tasks/{t1.pk}/review/', {'decision': 'approved', 'note': '', 'revision': t1.revision})
+        self.assertEqual(r.json()['redirect'], f'/tasks/{t2.pk}/')
+        t2.refresh_from_db()
+        r = self.post(f'/tasks/{t2.pk}/review/', {'decision': 'approved', 'note': '', 'revision': t2.revision})
+        self.assertEqual(r.json()['redirect'], f'/projects/{self.project.pk}/')
+        r = self.client.get(f'/projects/{self.project.pk}/spot-check/')
+        self.assertIn(r['Location'], [f'/tasks/{t1.pk}/', f'/tasks/{t2.pk}/'])
+        self.assertTrue(Event.objects.filter(action='quality.sampled').exists())
+        empty = Project.objects.create(workspace=self.workspace, name='Empty')
+        self.assertEqual(self.client.get(f'/projects/{empty.pk}/spot-check/')['Location'], f'/projects/{empty.pk}/')
+
+    def test_progress_report_on_project_page(self):
+        task = self.upload()
+        self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation(), 'submit': True})
+        response = self.client.get(f'/projects/{self.project.pk}/')
+        progress = response.context['progress']
+        self.assertEqual(progress['submitted_7d'], 1)
+        self.assertEqual(progress['rows'][0]['username'], 'owner')
+        self.assertEqual(progress['rows'][0]['submitted'], 1)
+        self.client.force_login(self.worker)
+        self.assertNotContains(self.client.get(f'/projects/{self.project.pk}/'), 'Progress</h2>')
+
     def test_upload_validation_and_duplicate_detection(self):
         self.upload()
         self.assertEqual(self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image()}).status_code, 400)
@@ -393,6 +445,9 @@ class IsolationTests(TestCase):
             f'/tasks/{self.task.pk}/asset/',
             f'/releases/{self.release.pk}/',
             f'/releases/{self.release.pk}/coco/',
+            f'/projects/{self.project.pk}/export/',
+            f'/projects/{self.project.pk}/review-next/',
+            f'/projects/{self.project.pk}/spot-check/',
         ])
         self.assertTrue(all(code == 404 for code in statuses.values()), statuses)
 
@@ -405,6 +460,10 @@ class IsolationTests(TestCase):
             f'/tasks/{self.task.pk}/save/': {'revision': 0, 'annotation': annotation},
             f'/tasks/{self.task.pk}/assign/': {'user': self.outsider.pk, 'revision': 0},
             f'/tasks/{self.task.pk}/review/': {'decision': 'approved', 'revision': 0},
+            f'/tasks/{self.task.pk}/comment/': {'note': 'x'},
+            f'/tasks/{self.task.pk}/restore/': {'revision': 0, 'event_id': 1},
+            f'/projects/{self.project.pk}/assign/': {'user': self.outsider.pk, 'task_ids': [self.task.pk]},
+            f'/projects/{self.project.pk}/geometry/': {'geometry': 'box'},
             '/projects/create/': {'workspace': self.workspace.pk, 'name': 'pwned'},
         }
         for path, data in posts.items():

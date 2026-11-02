@@ -120,7 +120,8 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         p.get_by_label('Feedback').fill('Geometry and relation verified.')
         with p.expect_navigation():
             p.get_by_role('button', name='Record review').click()
-        expect(p.locator('.status')).to_have_text('Approved')
+        # review auto-advances; queue exhausted → back on the project page
+        expect(p.locator('td .status').first).to_have_text('Approved')
         p.goto(project_url)
         p.get_by_label('Release name').fill('verified-v1')
         with p.expect_navigation():

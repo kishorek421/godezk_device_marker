@@ -9,6 +9,7 @@ import math
 import re
 import tempfile
 import zipfile
+from datetime import timedelta
 from functools import wraps
 from PIL import Image, UnidentifiedImageError
 from django.contrib.auth.decorators import login_required
@@ -18,6 +19,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError
+from django.db.models import Count
 from django.http import JsonResponse, FileResponse, HttpResponseForbidden
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -117,6 +119,7 @@ def project_create(request):
 @login_required
 def project_page(request, pk):
     p, m = project_access(request, pk)
+    members = list(Membership.objects.filter(workspace=p.workspace).select_related('user'))
     tasks = p.tasks.select_related('assignee').order_by('id')
     state = request.GET.get('state')
     if state:
@@ -125,7 +128,49 @@ def project_page(request, pk):
     if query:
         tasks = tasks.filter(filename__icontains=query)
     page = Paginator(tasks, 50).get_page(request.GET.get('page'))
-    return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': Membership.objects.filter(workspace=p.workspace).select_related('user'), 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES})
+    received = {}
+    for row in p.events.filter(action__in=['review.approved', 'review.changes_requested']).values('task__assignee__username', 'action').annotate(n=Count('id')):
+        received.setdefault(row['task__assignee__username'], {'approved': 0, 'changes_requested': 0})[row['action'].split('.')[1]] += row['n']
+    rows = []
+    for mem in members:
+        counts = dict(p.tasks.filter(assignee=mem.user).values_list('state').annotate(n=Count('id')).values_list('state', 'n'))
+        if not counts:
+            continue
+        got = received.get(mem.user.username, {'approved': 0, 'changes_requested': 0})
+        decided = got['approved'] + got['changes_requested']
+        rows.append({'username': mem.user.username, 'role': mem.get_role_display(),
+                     'open': counts.get('open', 0), 'in_progress': counts.get('in_progress', 0), 'submitted': counts.get('submitted', 0),
+                     'approved': counts.get('approved', 0), 'changes_requested': counts.get('changes_requested', 0),
+                     'rate': f"{round(100 * got['approved'] / decided)}%" if decided else '—'})
+    given_map = {}
+    for row in p.events.filter(action__in=['review.approved', 'review.changes_requested']).values('actor__username', 'action').annotate(n=Count('id')):
+        given_map.setdefault(row['actor__username'], {'approved': 0, 'changes_requested': 0})[row['action'].split('.')[1]] += row['n']
+    given = [{'username': u, 'approved': v['approved'], 'changes': v['changes_requested'], 'total': v['approved'] + v['changes_requested']}
+             for u, v in given_map.items()]
+    progress = {'rows': rows, 'given': given, 'total': p.tasks.count(), 'approved': p.tasks.filter(state='approved').count(),
+                'submitted_7d': p.events.filter(action='task.submitted', created_at__gte=timezone.now() - timedelta(days=7)).count()}
+    return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': members, 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES, 'progress': progress})
+
+
+@login_required
+def review_next(request, pk):
+    p, m = project_access(request, pk)
+    if m.role not in ['owner', 'reviewer']:
+        return HttpResponseForbidden('Only reviewers can use the review queue')
+    nxt = p.tasks.filter(state='submitted').order_by('id').first()
+    return redirect(f'/tasks/{nxt.pk}/' if nxt else f'/projects/{p.pk}/')
+
+
+@login_required
+def spot_check(request, pk):
+    p, m = project_access(request, pk)
+    if m.role not in ['owner', 'reviewer']:
+        return HttpResponseForbidden('Only reviewers can spot-check approved work')
+    t = p.tasks.filter(state='approved').order_by('?').first()
+    if not t:
+        return redirect(f'/projects/{p.pk}/')
+    event(request, p, 'quality.sampled', t)
+    return redirect(f'/tasks/{t.pk}/')
 
 
 @api
@@ -383,6 +428,34 @@ def review(request, pk):
     if not Task.objects.filter(pk=t.pk, revision=revision, state='submitted').update(state=decision, revision=revision + 1):
         return JsonResponse({'error': 'Task changed or is not submitted. Reload.'}, status=409)
     event(request, t.project, f'review.{decision}', t, {'note': note, 'revision': revision + 1})
+    nxt = t.project.tasks.filter(state='submitted').order_by('id').first()
+    return JsonResponse({'redirect': f'/tasks/{nxt.pk}/' if nxt else f'/projects/{t.project_id}/'})
+
+
+@api
+def comment(request, pk):
+    t, _ = task_access(request, pk)
+    note = request.data.get('note')
+    if not isinstance(note, str) or not note.strip() or len(note) > 2000:
+        raise Invalid('Comment is required (maximum 2000 characters)')
+    event(request, t.project, 'task.comment', t, {'text': note.strip()})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
+def restore(request, pk):
+    t, m = task_access(request, pk)
+    if t.state not in ['open', 'in_progress', 'changes_requested'] or (t.assignee_id != request.user.pk and m.role != 'owner'):
+        return JsonResponse({'error': 'Task is not editable by you'}, status=403)
+    revision = request.data.get('revision')
+    if type(revision) is not int:
+        raise Invalid('Revision is required')
+    source = get_object_or_404(Event, pk=request.data.get('event_id'), task=t, action__in=['annotation.saved', 'task.submitted', 'annotation.restored'])
+    annotation = validate_annotation(source.payload.get('annotation'), t.project)
+    if not Task.objects.filter(pk=t.pk, revision=revision, state=t.state).update(annotation=annotation, revision=revision + 1):
+        return JsonResponse({'error': 'Conflict: a newer revision exists. Reload before saving.'}, status=409)
+    event(request, t.project, 'annotation.restored', t, {'revision': revision + 1, 'from_revision': source.payload.get('revision'), 'annotation': annotation})
     return JsonResponse({'reload': True})
 
 

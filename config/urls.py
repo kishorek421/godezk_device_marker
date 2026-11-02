@@ -29,6 +29,8 @@ urlpatterns = [
     path('projects/<int:pk>/assign/', views.bulk_assign),
     path('projects/<int:pk>/geometry/', views.geometry_set),
     path('projects/<int:pk>/export/', views.export_zip),
+    path('projects/<int:pk>/review-next/', views.review_next),
+    path('projects/<int:pk>/spot-check/', views.spot_check),
     path('projects/<int:pk>/labels/', views.label_create),
     path('projects/<int:pk>/upload/', views.upload),
     path('projects/<int:pk>/releases/', views.release_create),
@@ -37,6 +39,8 @@ urlpatterns = [
     path('tasks/<int:pk>/save/', views.save),
     path('tasks/<int:pk>/assign/', views.assign),
     path('tasks/<int:pk>/review/', views.review),
+    path('tasks/<int:pk>/comment/', views.comment),
+    path('tasks/<int:pk>/restore/', views.restore),
     path('releases/<uuid:pk>/', views.release_download),
     path('releases/<uuid:pk>/coco/', views.release_coco),
 ]

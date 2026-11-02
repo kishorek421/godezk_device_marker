@@ -97,6 +97,19 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
   in sequential batches of 30 with a live counter, falls back to
   per-file retries on a failed batch, and reloads the queue when done —
   e2e-verified with a 35-file selection. ✅
+- AC51 Review decisions are atomic (`revision` + `state='submitted'`
+  guard): a second decision on the same task → 409, first one wins. ✅
+- AC52 Any member can comment on a task (≤2000 chars); comments render
+  in the task history for all members. ✅
+- AC53 Any saved/submitted/restored revision can be restored on an
+  editable task — re-validated against current schema and geometry lock;
+  stale revision → 409; non-editable actor → 403. ✅
+- AC54 `review-next` serves the oldest submitted task; recording a
+  review auto-advances to the next one or the project page. `spot-check`
+  opens a random approved task and audits `quality.sampled`. ✅
+- AC55 Project progress card: per-member state counts, review
+  acceptance rate, reviews given per reviewer, 7-day submission count —
+  owner/reviewer only. ✅
 
 ## Gap backlog
 

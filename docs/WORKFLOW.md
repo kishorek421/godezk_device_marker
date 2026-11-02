@@ -54,7 +54,27 @@ Every mutating call carries the caller's seen `revision`. The server
 applies `UPDATE … WHERE id=? AND revision=? AND state=?` atomically and
 returns **409** if zero rows matched (someone else saved first). The
 editor autosaves every 5 s and blocks further saves after a conflict
-until reload.
+until reload. The same guard covers reviews — two reviewers can't both
+decide a task; the second submission gets 409.
+
+## Review & quality controls
+
+- **Review queue**: `GET /projects/<id>/review-next/` sends a reviewer
+  to the oldest `submitted` task (deterministic order avoids duplicate
+  pulls). Recording a decision auto-advances to the next submitted task
+  or back to the project page when the queue is empty.
+- **Discussion**: any member can comment on a task (`task.comment`,
+  ≤2000 chars); comments and review notes appear in the task history.
+- **Annotation history**: every save/submit stores the full annotation
+  payload with its revision. The history list shows revision, region and
+  relation counts; an editable assignee or owner can **restore** any
+  prior version (re-validated against the current label schema and
+  geometry lock; audited as `annotation.restored`).
+- **Quality sampling**: `GET /projects/<id>/spot-check/` opens a random
+  `approved` task for re-inspection and logs `quality.sampled`.
+- **Progress report** (owner/reviewer on the project page): per-member
+  task counts by state, review acceptance rate per assignee, reviews
+  given per reviewer, and submissions in the last 7 days.
 
 ## Role matrix
 
@@ -67,7 +87,11 @@ until reload.
 | Upload images | `POST /projects/<id>/upload/` | ✓ | ✓ | |
 | Assign task | `POST /tasks/<id>/assign/` | ✓ | ✓ | |
 | Save/submit annotation | `POST /tasks/<id>/save/` | ✓ | if assignee | if assignee |
+| Restore annotation version | `POST /tasks/<id>/restore/` | ✓ | if assignee | if assignee |
 | Review task | `POST /tasks/<id>/review/` | ✓ | ✓ | |
+| Comment on task | `POST /tasks/<id>/comment/` | ✓ | ✓ | ✓ |
+| Next submitted task | `GET /projects/<id>/review-next/` | ✓ | ✓ | |
+| Spot-check approved task | `GET /projects/<id>/spot-check/` | ✓ | ✓ | |
 | Create release | `POST /projects/<id>/releases/` | ✓ | ✓ | |
 | View pages/assets | `GET …` | any workspace member | | |
 | Download release | `GET /releases/<uuid>/` | any workspace member | | |
@@ -84,7 +108,8 @@ until reload.
 `project.created` · `member.added` · `schema.label_created` ·
 `task.uploaded` · `task.assigned` · `annotation.saved` ·
 `task.submitted` · `review.approved` · `review.changes_requested` ·
-`release.created` · `project.geometry_changed`
+`release.created` · `project.geometry_changed` · `task.comment` ·
+`annotation.restored` · `quality.sampled`
 
 Each records `project`, `task` (nullable), `actor`, `action`, `payload`,
 `created_at`. Save/submit payloads embed the full annotation +
