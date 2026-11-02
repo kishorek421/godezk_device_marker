@@ -12,7 +12,8 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 
 ## Upload pipeline
 
-- AC6 Accept PNG/JPEG/WebP ≤20 MB ≤40 MP; ≤30 per batch; else 400. ✅
+- AC6 Accept PNG/JPEG/WebP ≤20 MB ≤40 MP; ≤30 per request (client
+  chunks larger selections — see AC50); else 400. ✅
 - AC7 Non-image / corrupt payloads rejected (Pillow verify + load). ✅
 - AC8 Identical bytes (SHA-256) can't upload twice per project → 400. ✅
 - AC9 Stored asset is re-encoded JPEG; original never exposed. 🟡
@@ -92,6 +93,10 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
   only; annotator → 403, zero labeled → 400. ✅
 - AC49 After drawing a region the editor switches to Select so it is
   immediately draggable/resizable — e2e-verified (drag moves the box). ✅
+- AC50 Upload form accepts any number of files: the browser posts them
+  in sequential batches of 30 with a live counter, falls back to
+  per-file retries on a failed batch, and reloads the queue when done —
+  e2e-verified with a 35-file selection. ✅
 
 ## Gap backlog
 

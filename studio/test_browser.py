@@ -169,3 +169,19 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
             p.get_by_role('button', name='Save', exact=True).click()
         expect(p.locator('#save-status')).to_contain_text('Save failed')
         self.assertEqual(self.errors, [])
+
+    def test_chunked_upload_in_browser(self):
+        project = Project.objects.create(workspace=self.workspace, name='Bulk lab')
+        buffers = []
+        for i in range(35):
+            buffer = io.BytesIO()
+            Image.new('RGB', (64, 64), (i * 7 % 256, 90, 160)).save(buffer, 'PNG')
+            buffers.append({'name': f'panel-{i}.png', 'mimeType': 'image/png', 'buffer': buffer.getvalue()})
+        p = self.page
+        self.login('manager', 'Browser-manager-482!')
+        p.goto(self.live_server_url + f'/projects/{project.pk}/')
+        p.locator('input[type=file]').set_input_files(buffers)
+        p.get_by_role('button', name='Upload to dataset').click()
+        expect(p.locator('.sectionhead .muted').first).to_contain_text('35 items', timeout=30000)
+        self.assertEqual(Task.objects.filter(project=project).count(), 35)
+        self.assertEqual(self.errors, [])
