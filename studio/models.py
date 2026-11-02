@@ -84,3 +84,34 @@ class Release(models.Model):
     snapshot = models.JSONField()
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ApiToken(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, related_name='api_tokens', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    name = models.CharField(max_length=80)
+    prefix = models.CharField(max_length=16, db_index=True)
+    key_hash = models.CharField(max_length=64)
+    revoked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True)
+
+
+class Webhook(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, related_name='webhooks', on_delete=models.CASCADE)
+    url = models.CharField(max_length=500)
+    secret = models.CharField(max_length=64)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class WebhookDelivery(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    webhook = models.ForeignKey(Webhook, related_name='deliveries', on_delete=models.CASCADE)
+    action = models.CharField(max_length=40)
+    status = models.CharField(max_length=12)
+    response_code = models.PositiveIntegerField(null=True)
+    error = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

@@ -110,6 +110,18 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 - AC55 Project progress card: per-member state counts, review
   acceptance rate, reviews given per reviewer, 7-day submission count —
   owner/reviewer only. ✅
+- AC56 Label archive/restore toggles usability, bumps `schema_version`,
+  and makes future saves using it fail validation. ✅
+- AC57 YOLO zip export: `data.yaml` + `labels/<stem>.txt` + `images/`,
+  detection rows for boxes, segmentation for polygons, tiny boxes for
+  points; stems paired. ✅
+- AC58 Bearer API tokens scope reads to their workspace: wrong-scope →
+  404, bad/revoked → 401, `last_used_at` tracked. ✅
+- AC59 Webhooks fire post-commit with `X-Godezk-Signature` HMAC-SHA256;
+  success and failure both logged in `WebhookDelivery`; ping endpoint
+  verifies connectivity. ✅
+- AC60 `AWS_STORAGE_BUCKET_NAME` switches private uploads to S3 via
+  django-storages; filesystem stays default. 🟡 (config, untested w/o S3)
 
 ## Gap backlog
 

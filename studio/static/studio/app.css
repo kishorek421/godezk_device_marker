@@ -160,6 +160,11 @@ footer span{letter-spacing:0;font-size:11px}
 .history form{margin-top:6px}
 .history .restore{font-size:10px;padding:3px 8px}
 .progress-table th,.progress-table td{padding:5px 6px;font-size:11px;white-space:nowrap}
+.labelrow form{margin-left:auto}
+.labelrow form button{padding:3px 8px;font-size:10px}
+.token-out code,[data-token-out] code{word-break:break-all;user-select:all}
+.teamrow form{margin-left:auto}
+.teamrow form button{padding:3px 8px;font-size:10px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
 @media(max-width:1000px){
   .layout{grid-template-columns:minmax(0,1fr) 285px}

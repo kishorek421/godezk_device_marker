@@ -3,11 +3,14 @@ from django.shortcuts import render, get_object_or_404, redirect
 # Create your views here.
 
 import hashlib
+import hmac
 import io
 import json
 import math
 import re
+import secrets
 import tempfile
+import urllib.request
 import zipfile
 from datetime import timedelta
 from functools import wraps
@@ -23,7 +26,7 @@ from django.db.models import Count
 from django.http import JsonResponse, FileResponse, HttpResponseForbidden
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from .models import Workspace, Membership, Project, Label, Task, Event, Release
+from .models import Workspace, Membership, Project, Label, Task, Event, Release, ApiToken, Webhook, WebhookDelivery
 
 
 class Invalid(Exception):
@@ -86,6 +89,25 @@ def text(data, key, maximum=160):
 
 def event(request, project, action, task=None, payload=None):
     Event.objects.create(project=project, task=task, actor=request.user, action=action, payload=payload or {})
+    safe = {k: v for k, v in (payload or {}).items() if k != 'annotation'}
+    body = {'event': action, 'project_id': project.pk, 'task_id': task.pk if task else None,
+            'actor': request.user.username, 'payload': safe, 'timestamp': timezone.now().isoformat()}
+    for hook in project.webhooks.filter(active=True):
+        transaction.on_commit(lambda hook=hook, body=body: deliver(hook, body))
+
+
+def deliver(hook, body):
+    raw = json.dumps(body).encode()
+    signature = hmac.new(hook.secret.encode(), raw, hashlib.sha256).hexdigest()
+    headers = {'Content-Type': 'application/json', 'X-Godezk-Event': body['event'], 'X-Godezk-Signature': f'sha256={signature}'}
+    delivery = {'webhook': hook, 'action': body['event'], 'status': 'failed', 'response_code': None, 'error': ''}
+    try:
+        with urllib.request.urlopen(urllib.request.Request(hook.url, data=raw, headers=headers), timeout=5) as response:
+            delivery['response_code'] = response.status
+            delivery['status'] = 'delivered' if 200 <= response.status < 300 else 'failed'
+    except Exception as exc:
+        delivery['error'] = str(exc)[:300]
+    WebhookDelivery.objects.create(**delivery)
 
 
 @login_required
@@ -149,7 +171,10 @@ def project_page(request, pk):
              for u, v in given_map.items()]
     progress = {'rows': rows, 'given': given, 'total': p.tasks.count(), 'approved': p.tasks.filter(state='approved').count(),
                 'submitted_7d': p.events.filter(action='task.submitted', created_at__gte=timezone.now() - timedelta(days=7)).count()}
-    return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': members, 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES, 'progress': progress})
+    hooks = [(w, w.deliveries.order_by('-created_at').first()) for w in p.webhooks.all()]
+    return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': members, 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES, 'progress': progress,
+                                                   'api_tokens': p.workspace.api_tokens.filter(revoked=False).select_related('user'),
+                                                   'webhooks': hooks})
 
 
 @login_required
@@ -184,6 +209,76 @@ def geometry_set(request, pk):
     p.save(update_fields=['geometry'])
     event(request, p, 'project.geometry_changed', payload={'geometry': geometry})
     return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
+def label_archive(request, pk, label_id):
+    p, _ = project_access(request, pk, ['owner'])
+    label = get_object_or_404(Label, pk=label_id, project=p)
+    label.archived = not label.archived
+    label.save(update_fields=['archived'])
+    p.schema_version += 1
+    p.save(update_fields=['schema_version'])
+    event(request, p, 'schema.label_archived' if label.archived else 'schema.label_restored',
+          payload={'key': label.key, 'schema_version': p.schema_version})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
+def token_create(request, pk):
+    p, _ = project_access(request, pk, ['owner'])
+    name = text(request.data, 'name', 80)
+    secret = 'gm_' + secrets.token_urlsafe(24)
+    token = ApiToken.objects.create(workspace=p.workspace, user=request.user, name=name,
+                                    prefix=secret[:12], key_hash=hashlib.sha256(secret.encode()).hexdigest())
+    event(request, p, 'api.token_created', payload={'name': name})
+    return JsonResponse({'token': secret, 'id': str(token.pk)})
+
+
+@api
+@transaction.atomic
+def token_revoke(request, pk, token_id):
+    p, _ = project_access(request, pk, ['owner'])
+    token = get_object_or_404(ApiToken, pk=token_id, workspace=p.workspace)
+    token.revoked = True
+    token.save(update_fields=['revoked'])
+    event(request, p, 'api.token_revoked', payload={'name': token.name})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
+def webhook_create(request, pk):
+    p, _ = project_access(request, pk, ['owner'])
+    url = request.data.get('url', '')
+    if not isinstance(url, str) or not re.match(r'^https?://\S+$', url) or len(url) > 500:
+        raise Invalid('Use a valid http(s) endpoint URL')
+    if p.webhooks.count() >= 10:
+        raise Invalid('Maximum 10 webhooks per project')
+    Webhook.objects.create(project=p, url=url.strip(), secret=secrets.token_hex(24))
+    event(request, p, 'webhook.created', payload={'url': url.strip()})
+    return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
+def webhook_delete(request, pk, hook_id):
+    p, _ = project_access(request, pk, ['owner'])
+    get_object_or_404(Webhook, pk=hook_id, project=p).delete()
+    event(request, p, 'webhook.deleted')
+    return JsonResponse({'reload': True})
+
+
+@api
+def webhook_ping(request, pk, hook_id):
+    p, _ = project_access(request, pk, ['owner'])
+    hook = get_object_or_404(Webhook, pk=hook_id, project=p)
+    deliver(hook, {'event': 'webhook.ping', 'project_id': p.pk, 'task_id': None,
+                   'actor': request.user.username, 'payload': {}, 'timestamp': timezone.now().isoformat()})
+    last = hook.deliveries.order_by('-created_at').first()
+    return JsonResponse({'reload': True, 'status': last.status})
 
 
 @api
@@ -568,3 +663,115 @@ def export_zip(request, pk):
     response = FileResponse(tmp, as_attachment=True, filename=f'{slug}-export.zip', content_type='application/zip')
     response['Cache-Control'] = 'private, no-store'
     return response
+
+
+def snapshot_to_yolo(snapshot):
+    labels = snapshot.get('labels', [])
+    category_index = {l['id']: i for i, l in enumerate(labels)}
+    names = '\n'.join(f'  {i}: {l["name"]}' for i, l in enumerate(labels))
+    texts = {'data.yaml': f"path: .\ntrain: images\nval: images\n\nnames:\n{names}\n",
+             'README.txt': ('YOLOv8 dataset export from Godezk Marker.\n\n'
+                            'Region mapping (all coordinates normalized 0-1):\n'
+                            '  box     -> "class cx cy w h" detection row\n'
+                            '  polygon -> "class x1 y1 x2 y2 ..." segmentation row\n'
+                            '  point   -> "class x y 0.004 0.004" small box on the point\n\n'
+                            'Label file stems match image file stems.\n')}
+    images = {}
+    for task in snapshot.get('tasks', []):
+        stem = re.sub(r'[^\w.-]', '_', task.get('filename', 'image').rsplit('.', 1)[0])
+        stem = f"{task['id']}-{stem}"
+        lines = []
+        for region in task.get('annotation', {}).get('regions', []):
+            cls = category_index.get(region['label'], 0)
+            points = region['points']
+            if region['type'] == 'box':
+                (x0, y0), (x1, y1) = points
+                lines.append(f"{cls} {(x0 + x1) / 2:.6f} {(y0 + y1) / 2:.6f} {x1 - x0:.6f} {y1 - y0:.6f}")
+            elif region['type'] == 'polygon':
+                lines.append(f"{cls} " + ' '.join(f"{x:.6f} {y:.6f}" for x, y in points))
+            else:
+                x, y = points[0]
+                lines.append(f"{cls} {x:.6f} {y:.6f} 0.004000 0.004000")
+        texts[f'labels/{stem}.txt'] = '\n'.join(lines)
+        images[f'images/{stem}.jpg'] = task['id']
+    return texts, images
+
+
+@login_required
+def release_yolo(request, pk):
+    release = _release(request, pk)
+    texts, images = snapshot_to_yolo(release.snapshot)
+    tmp = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024)
+    with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
+        for arcname, content in texts.items():
+            z.writestr(arcname, content)
+        for arcname, task_id in images.items():
+            task = Task.objects.filter(pk=task_id).first()
+            if task and task.image:
+                with task.image.open('rb') as f:
+                    z.writestr(arcname, f.read(), compress_type=zipfile.ZIP_STORED)
+    tmp.seek(0)
+    response = FileResponse(tmp, as_attachment=True, filename=f'release-{release.pk}-yolo.zip', content_type='application/zip')
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+def api_auth(fn):
+    @wraps(fn)
+    def wrapped(request, *args, **kwargs):
+        header = request.headers.get('Authorization', '')
+        token_value = header[7:].strip() if header.startswith('Bearer ') else ''
+        digest = hashlib.sha256(token_value.encode()).hexdigest()
+        token = ApiToken.objects.select_related('workspace', 'user').filter(key_hash=digest, revoked=False).first()
+        if not token or not token.user.is_active:
+            return JsonResponse({'error': 'Invalid or revoked API token'}, status=401)
+        token.last_used_at = timezone.now()
+        token.save(update_fields=['last_used_at'])
+        request.api_token = token
+        return fn(request, *args, **kwargs)
+    return wrapped
+
+
+@api_auth
+def api_projects(request):
+    projects = Project.objects.filter(workspace=request.api_token.workspace).order_by('id')
+    return JsonResponse({'projects': [{'id': p.pk, 'name': p.name, 'geometry': p.geometry,
+                                       'schema_version': p.schema_version, 'tasks': p.tasks.count()} for p in projects]})
+
+
+@api_auth
+def api_project_detail(request, pk):
+    p = get_object_or_404(Project, pk=pk, workspace=request.api_token.workspace)
+    return JsonResponse({'id': p.pk, 'name': p.name, 'instructions': p.instructions, 'geometry': p.geometry,
+                         'schema_version': p.schema_version, 'created_at': p.created_at.isoformat(),
+                         'labels': list(p.labels.values('id', 'key', 'name', 'color', 'attributes', 'archived')),
+                         'task_counts': dict(p.tasks.values_list('state').annotate(n=Count('id')).values_list('state', 'n'))})
+
+
+@api_auth
+def api_tasks(request, pk):
+    p = get_object_or_404(Project, pk=pk, workspace=request.api_token.workspace)
+    try:
+        offset = max(0, int(request.GET.get('offset', 0)))
+        limit = min(500, max(1, int(request.GET.get('limit', 100))))
+    except ValueError:
+        return JsonResponse({'error': 'Invalid offset/limit'}, status=400)
+    tasks = p.tasks.select_related('assignee').order_by('id')[offset:offset + limit]
+    return JsonResponse({'total': p.tasks.count(), 'offset': offset, 'limit': limit,
+                         'tasks': [{'id': t.pk, 'filename': t.filename, 'state': t.state, 'revision': t.revision,
+                                    'width': t.width, 'height': t.height, 'regions': len(t.annotation.get('regions', [])),
+                                    'assignee': t.assignee.username if t.assignee else None} for t in tasks]})
+
+
+@api_auth
+def api_task(request, pk):
+    t = get_object_or_404(Task.objects.select_related('project'), pk=pk, project__workspace=request.api_token.workspace)
+    return JsonResponse({'id': t.pk, 'project_id': t.project_id, 'filename': t.filename, 'state': t.state,
+                         'revision': t.revision, 'width': t.width, 'height': t.height,
+                         'annotation': t.annotation, 'updated_at': t.updated_at.isoformat()})
+
+
+@api_auth
+def api_release(request, pk):
+    release = get_object_or_404(Release, pk=pk, project__workspace=request.api_token.workspace)
+    return JsonResponse(release.snapshot)

@@ -2,15 +2,18 @@ from django.test import TestCase
 
 # Create your tests here.
 
+import hashlib
+import hmac
 import io
 import json
 import tempfile
 import zipfile
+from unittest import mock
 from PIL import Image
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings, Client
-from .models import Workspace, Membership, Project, Label, Task, Release, Event
+from .models import Workspace, Membership, Project, Label, Task, Release, Event, ApiToken, Webhook, WebhookDelivery
 
 
 class WorkflowTests(TestCase):
@@ -263,6 +266,95 @@ class WorkflowTests(TestCase):
         self.client.force_login(self.worker)
         self.assertNotContains(self.client.get(f'/projects/{self.project.pk}/'), 'Progress</h2>')
 
+    def test_label_archive_lifecycle(self):
+        task = self.upload()
+        url = f'/projects/{self.project.pk}/labels/{self.label.pk}/archive/'
+        self.client.force_login(self.worker)
+        self.assertEqual(self.post(url, {}).status_code, 400)
+        self.client.force_login(self.owner)
+        version = self.project.schema_version
+        self.assertEqual(self.post(url, {}).status_code, 200)
+        self.label.refresh_from_db(); self.project.refresh_from_db()
+        self.assertTrue(self.label.archived)
+        self.assertEqual(self.project.schema_version, version + 1)
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation()}).status_code, 400)
+        self.assertEqual(self.post(url, {}).status_code, 200)
+        self.assertFalse(Label.objects.get(pk=self.label.pk).archived)
+        self.assertEqual(self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation()}).status_code, 200)
+
+    def _release(self):
+        task = self.upload()
+        self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation(), 'submit': True})
+        task.refresh_from_db()
+        self.client.force_login(self.reviewer)
+        self.post(f'/tasks/{task.pk}/review/', {'decision': 'approved', 'note': '', 'revision': task.revision})
+        self.post(f'/projects/{self.project.pk}/releases/', {'name': 'v1'})
+        self.client.force_login(self.owner)
+        return self.project.releases.get()
+
+    def test_release_yolo_zip(self):
+        release = self._release()
+        response = self.client.get(f'/releases/{release.pk}/yolo/')
+        self.assertEqual(response.status_code, 200)
+        body = b''.join(response.streaming_content)
+        response.close()
+        archive = zipfile.ZipFile(io.BytesIO(body))
+        names = archive.namelist()
+        self.assertIn('data.yaml', names)
+        self.assertIn('Switch', archive.read('data.yaml').decode())
+        label_file = [n for n in names if n.startswith('labels/')][0]
+        self.assertIn('0 0.250000 0.350000 0.300000 0.500000', archive.read(label_file).decode())
+        image_file = [n for n in names if n.startswith('images/')][0]
+        self.assertEqual(label_file[7:-4], image_file[7:-4])
+        self.client.force_login(self.worker)
+        self.assertEqual(self.client.get(f'/releases/{release.pk}/yolo/').status_code, 200)
+
+    def test_api_tokens_and_read_api(self):
+        task = self.upload()
+        secret = self.post(f'/projects/{self.project.pk}/tokens/', {'name': 'pipeline'}).json()['token']
+        self.assertTrue(secret.startswith('gm_'))
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {secret}'}
+        self.client.logout()
+        self.assertEqual(self.client.get('/api/v1/projects/', **headers).status_code, 200)
+        self.assertEqual(self.client.get(f'/api/v1/projects/{self.project.pk}/', **headers).status_code, 200)
+        tasks = self.client.get(f'/api/v1/projects/{self.project.pk}/tasks/', **headers).json()
+        self.assertEqual(tasks['total'], 1)
+        self.assertEqual(self.client.get(f'/api/v1/tasks/{task.pk}/', **headers).json()['id'], task.pk)
+        other = Project.objects.create(workspace=Workspace.objects.create(name='Other'), name='X')
+        self.assertEqual(self.client.get(f'/api/v1/projects/{other.pk}/', **headers).status_code, 404)
+        self.assertEqual(self.client.get('/api/v1/projects/', HTTP_AUTHORIZATION='Bearer nope').status_code, 401)
+        self.assertEqual(self.client.get('/api/v1/projects/').status_code, 401)
+        self.client.force_login(self.owner)
+        token = ApiToken.objects.get()
+        self.post(f'/projects/{self.project.pk}/tokens/{token.pk}/revoke/', {})
+        self.assertEqual(self.client.get('/api/v1/projects/', **headers).status_code, 401)
+
+    def test_webhook_crud_and_signed_delivery(self):
+        url = f'/projects/{self.project.pk}/webhooks/'
+        self.client.force_login(self.worker)
+        self.assertEqual(self.post(url, {'url': 'https://x.test/hook'}).status_code, 400)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.post(url, {'url': 'notaurl'}).status_code, 400)
+        self.assertEqual(self.post(url, {'url': 'https://x.test/hook'}).status_code, 200)
+        hook = self.project.webhooks.get()
+        task = self.upload()
+        with mock.patch('studio.views.urllib.request.urlopen') as fake:
+            fake.return_value.__enter__.return_value.status = 200
+            with self.captureOnCommitCallbacks(execute=True):
+                self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation()})
+        req = fake.call_args[0][0]
+        expected = hmac.new(hook.secret.encode(), req.data, hashlib.sha256).hexdigest()
+        self.assertEqual(req.headers['X-godezk-signature'], f'sha256={expected}')
+        delivery = WebhookDelivery.objects.get()
+        self.assertEqual(delivery.status, 'delivered')
+        self.assertEqual(delivery.response_code, 200)
+        with mock.patch('studio.views.urllib.request.urlopen', side_effect=OSError('down')):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.post(f'/tasks/{task.pk}/comment/', {'note': 'hi'})
+        self.assertEqual(WebhookDelivery.objects.filter(status='failed').count(), 1)
+        self.assertEqual(self.post(f'/projects/{self.project.pk}/webhooks/{hook.pk}/delete/', {}).status_code, 200)
+        self.assertEqual(self.project.webhooks.count(), 0)
+
     def test_upload_validation_and_duplicate_detection(self):
         self.upload()
         self.assertEqual(self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image()}).status_code, 400)
@@ -450,6 +542,8 @@ class IsolationTests(TestCase):
             f'/projects/{self.project.pk}/spot-check/',
         ])
         self.assertTrue(all(code == 404 for code in statuses.values()), statuses)
+        self.assertEqual(self.client.get('/api/v1/projects/').status_code, 401)
+        self.assertEqual(self.client.get(f'/api/v1/tasks/{self.task.pk}/').status_code, 401)
 
     def test_no_write_access_to_any_endpoint(self):
         annotation = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'box', 'points': [[.1, .1], [.5, .5]], 'attributes': {}}], 'relations': []}
@@ -464,6 +558,12 @@ class IsolationTests(TestCase):
             f'/tasks/{self.task.pk}/restore/': {'revision': 0, 'event_id': 1},
             f'/projects/{self.project.pk}/assign/': {'user': self.outsider.pk, 'task_ids': [self.task.pk]},
             f'/projects/{self.project.pk}/geometry/': {'geometry': 'box'},
+            f'/projects/{self.project.pk}/labels/{self.label.pk}/archive/': {},
+            f'/projects/{self.project.pk}/tokens/': {'name': 'x'},
+            f'/projects/{self.project.pk}/tokens/{self.release.pk}/revoke/': {},
+            f'/projects/{self.project.pk}/webhooks/': {'url': 'https://x.test'},
+            f'/projects/{self.project.pk}/webhooks/{self.release.pk}/delete/': {},
+            f'/projects/{self.project.pk}/webhooks/{self.release.pk}/ping/': {},
             '/projects/create/': {'workspace': self.workspace.pk, 'name': 'pwned'},
         }
         for path, data in posts.items():

@@ -155,3 +155,17 @@ if os.environ.get('POSTGRES_DB'):
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
     }
 
+# Object storage (S3-compatible). Set AWS_STORAGE_BUCKET_NAME + credentials
+# to store private uploads in object storage instead of the local filesystem.
+if os.environ.get('AWS_STORAGE_BUCKET_NAME'):
+    INSTALLED_APPS.append('storages')
+    AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL') or None
+    AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME') or None
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = False
+    STORAGES = {
+        'default': {'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+

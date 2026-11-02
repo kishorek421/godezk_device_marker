@@ -25,7 +25,12 @@ document.querySelectorAll('form[data-api]:not([data-chunk])').forEach(form => fo
       if ('revision' in body) body.revision = Number(body.revision);
     }
     const result = await apiRequest(form.dataset.api, body, form.hasAttribute('data-json'));
-    if (result.redirect) location.href = result.redirect;
+    if (result.token) {
+      const out = form.querySelector('[data-token-out]');
+      if (out) out.innerHTML = `Copy now — shown once:<br><code>${result.token}</code>`;
+      notify('API token created — copy it now');
+    }
+    else if (result.redirect) location.href = result.redirect;
     else if (result.reload) location.reload();
     else notify('Saved successfully');
   } catch (error) { notify(error.message, true); }

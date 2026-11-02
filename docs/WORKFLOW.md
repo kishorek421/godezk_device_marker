@@ -76,6 +76,36 @@ decide a task; the second submission gets 409.
   task counts by state, review acceptance rate per assignee, reviews
   given per reviewer, and submissions in the last 7 days.
 
+## Dataset delivery
+
+- **Release formats**: `annotation-studio/v1` JSON, COCO JSON, and
+  **YOLO zip** (`data.yaml` + `labels/*.txt` + `images/`; boxes →
+  detection rows, polygons → segmentation rows, points → tiny boxes).
+- **Label schema lifecycle**: labels can be archived/restored by the
+  owner; every change bumps `schema_version`, which each release pins.
+- **Large exports**: all zip endpoints stream through disk-spilled
+  tempfiles, so release-sized exports don't exhaust memory.
+- **Read API** — Bearer tokens (`gm_…`) created per workspace under
+  project *Integrations*; scoped to that workspace, revocable:
+
+  ```
+  GET /api/v1/projects/                 list workspace projects
+  GET /api/v1/projects/<id>/            detail + labels + state counts
+  GET /api/v1/projects/<id>/tasks/      task list (?offset=&limit= ≤500)
+  GET /api/v1/tasks/<id>/               task + full annotation
+  GET /api/v1/releases/<uuid>/          immutable release snapshot
+  ```
+
+- **Webhooks** (owner-configured): every audit event POSTs to each
+  active hook with `X-Godezk-Event` and `X-Godezk-Signature:
+  sha256=<HMAC(secret, body)>`. Deliveries are attempted after commit
+  (rolled-back writes never fire), logged in `WebhookDelivery`, and a
+  **Ping** button verifies the endpoint. No retries — failed deliveries
+  are recorded, not queued.
+- **Object storage**: set `AWS_STORAGE_BUCKET_NAME` (+ `AWS_S3_ENDPOINT_URL`
+  for S3-compatible hosts) to move private uploads to S3 via
+  django-storages; filesystem remains the default.
+
 ## Role matrix
 
 | Action | Endpoint | owner | reviewer | annotator |
@@ -98,6 +128,9 @@ decide a task; the second submission gets 409.
 | Download COCO export | `GET /releases/<uuid>/coco/` | any workspace member | | |
 | Bulk assign | `POST /projects/<id>/assign/` | ✓ | ✓ | |
 | Set geometry lock | `POST /projects/<id>/geometry/` | ✓ | | |
+| Archive/restore label | `POST /projects/<id>/labels/<lid>/archive/` | ✓ | | |
+| Create/revoke API token | `POST /projects/<id>/tokens/…` | ✓ | | |
+| Manage webhooks | `POST /projects/<id>/webhooks/…` | ✓ | | |
 | Export current work (zip) | `GET /projects/<id>/export/` | ✓ | ✓ | |
 
 > **Superusers** act as `owner` of every workspace — full read/write on
@@ -109,7 +142,9 @@ decide a task; the second submission gets 409.
 `task.uploaded` · `task.assigned` · `annotation.saved` ·
 `task.submitted` · `review.approved` · `review.changes_requested` ·
 `release.created` · `project.geometry_changed` · `task.comment` ·
-`annotation.restored` · `quality.sampled`
+`annotation.restored` · `quality.sampled` · `schema.label_archived` ·
+`schema.label_restored` · `api.token_created` · `api.token_revoked` ·
+`webhook.created` · `webhook.deleted`
 
 Each records `project`, `task` (nullable), `actor`, `action`, `payload`,
 `created_at`. Save/submit payloads embed the full annotation +
