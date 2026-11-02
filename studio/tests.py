@@ -5,6 +5,7 @@ from django.test import TestCase
 import io
 import json
 import tempfile
+import zipfile
 from PIL import Image
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -185,6 +186,30 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.project.tasks.get().assignee, self.worker)
         bad = self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image('other.png', 'blue'), 'assign_to': self.outsider.pk})
         self.assertEqual(bad.status_code, 404)
+
+    def test_export_zip_contains_labeled_tasks_and_images(self):
+        task = self.upload()
+        self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation()})
+        self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image('second.png', 'blue')})
+        url = f'/projects/{self.project.pk}/export/'
+        self.client.force_login(self.worker)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.client.force_login(self.reviewer)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        body = b''.join(response.streaming_content)
+        response.close()
+        archive = zipfile.ZipFile(io.BytesIO(body))
+        names = archive.namelist()
+        self.assertIn('annotations.json', names)
+        self.assertTrue(any(n.startswith('images/') for n in names))
+        data = json.loads(archive.read('annotations.json'))
+        self.assertTrue(data['draft'])
+        self.assertEqual(len(data['tasks']), 1)
+        self.assertEqual(len(data['tasks'][0]['annotation']['regions']), 2)
+        self.assertEqual(data['tasks'][0]['state'], 'in_progress')
+        empty = Project.objects.create(workspace=self.workspace, name='Empty')
+        self.assertEqual(self.client.get(f'/projects/{empty.pk}/export/').status_code, 400)
 
     def test_upload_validation_and_duplicate_detection(self):
         self.upload()

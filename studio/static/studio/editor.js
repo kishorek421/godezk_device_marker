@@ -139,7 +139,7 @@
     if (allowedType() && type !== allowedType()) return;
     if (!$('label').value) return notify('Create a label key in the project first.', true);
     checkpoint(); const r = {id: crypto.randomUUID(), label: $('label').value, type, points, attributes: {}};
-    doc.regions.push(r); selected = r.id; changed();
+    doc.regions.push(r); selected = r.id; setTool('select'); changed();
   }
   svg.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;

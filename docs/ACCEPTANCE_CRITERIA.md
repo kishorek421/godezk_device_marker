@@ -86,6 +86,12 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
   hidden after a box is drawn: e2e-verified. ✅
 - AC47 Owner can set/clear the geometry lock from the project page;
   non-owner → 400, invalid value → 400. ✅
+- AC48 `GET /projects/<id>/export/` streams a zip (annotations.json in
+  `annotation-studio/v1` + `images/`) for every task that has regions —
+  works after a single labeled image, no release needed. Owner/reviewer
+  only; annotator → 403, zero labeled → 400. ✅
+- AC49 After drawing a region the editor switches to Select so it is
+  immediately draggable/resizable — e2e-verified (drag moves the box). ✅
 
 ## Gap backlog
 

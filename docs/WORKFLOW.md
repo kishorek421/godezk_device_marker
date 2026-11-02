@@ -74,6 +74,7 @@ until reload.
 | Download COCO export | `GET /releases/<uuid>/coco/` | any workspace member | | |
 | Bulk assign | `POST /projects/<id>/assign/` | ✓ | ✓ | |
 | Set geometry lock | `POST /projects/<id>/geometry/` | ✓ | | |
+| Export current work (zip) | `GET /projects/<id>/export/` | ✓ | ✓ | |
 
 > **Superusers** act as `owner` of every workspace — full read/write on
 > all projects, tasks, assets, and releases without a membership row.

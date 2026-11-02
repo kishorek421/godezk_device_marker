@@ -7,6 +7,8 @@ import io
 import json
 import math
 import re
+import tempfile
+import zipfile
 from functools import wraps
 from PIL import Image, UnidentifiedImageError
 from django.contrib.auth.decorators import login_required
@@ -17,6 +19,7 @@ from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError
 from django.http import JsonResponse, FileResponse, HttpResponseForbidden
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 from .models import Workspace, Membership, Project, Label, Task, Event, Release
 
@@ -461,5 +464,34 @@ def release_coco(request, pk):
     release = _release(request, pk)
     response = JsonResponse(snapshot_to_coco(release.snapshot, release), json_dumps_params={'indent': 2})
     response['Content-Disposition'] = f'attachment; filename="release-{release.pk}-coco.json"'
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@login_required
+def export_zip(request, pk):
+    p, m = project_access(request, pk)
+    if m.role not in ['owner', 'reviewer']:
+        return HttpResponseForbidden('Exports are limited to owners and reviewers')
+    tasks = [t for t in p.tasks.select_related('assignee').order_by('id') if t.annotation.get('regions')]
+    if not tasks:
+        return JsonResponse({'error': 'Nothing is labeled yet — annotate at least one image first.'}, status=400)
+    snapshot = {'format': 'annotation-studio/v1', 'draft': True, 'exported_at': timezone.now().isoformat(),
+                'project': {'id': p.pk, 'name': p.name, 'geometry': p.geometry, 'schema_version': p.schema_version},
+                'labels': list(p.labels.values('id', 'key', 'name', 'color', 'attributes')),
+                'tasks': [{'id': t.pk, 'filename': t.filename, 'digest': t.digest, 'width': t.width, 'height': t.height,
+                           'state': t.state, 'assignee': t.assignee.username if t.assignee else None,
+                           'revision': t.revision, 'annotation': t.annotation} for t in tasks]}
+    snapshot = json.loads(json.dumps(snapshot, default=str))
+    tmp = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024)
+    with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('annotations.json', json.dumps(snapshot, indent=2))
+        for t in tasks:
+            safe = re.sub(r'[^\w.-]', '_', t.filename)
+            with t.image.open('rb') as f:
+                z.writestr(f'images/{t.pk}-{safe}', f.read(), compress_type=zipfile.ZIP_STORED)
+    tmp.seek(0)
+    slug = re.sub(r'[^\w-]+', '-', p.name).strip('-').lower() or 'project'
+    response = FileResponse(tmp, as_attachment=True, filename=f'{slug}-export.zip', content_type='application/zip')
     response['Cache-Control'] = 'private, no-store'
     return response

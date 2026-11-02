@@ -79,12 +79,18 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         p.get_by_role('button', name='Box (B)', exact=True).click()
         p.mouse.move(*point(.12, .15)); p.mouse.down(); p.mouse.move(*point(.42, .55), steps=8); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('1')
+        # the drawn box is immediately draggable — the tool auto-switches to Select
+        p.mouse.move(*point(.27, .35)); p.mouse.down(); p.mouse.move(*point(.37, .45), steps=5); p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('1')
+        self.assertTrue(215 < float(p.locator('#overlay rect').first.get_attribute('x')) < 225)
         p.locator('#attributes input').fill('on')
         p.locator('#attributes input').press('Tab')
         expect(p.get_by_role('button', name='Polygon (P)', exact=True)).to_be_hidden()
         expect(p.get_by_role('button', name='Point (K)', exact=True)).to_be_hidden()
+        p.get_by_role('button', name='Box (B)', exact=True).click()
         p.mouse.move(*point(.6, .2)); p.mouse.down(); p.mouse.move(*point(.85, .5), steps=8); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('2')
+        p.get_by_role('button', name='Box (B)', exact=True).click()
         p.mouse.move(*point(.7, .65)); p.mouse.down(); p.mouse.move(*point(.9, .9), steps=8); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('3')
         p.get_by_role('button', name='Undo', exact=True).click()
@@ -151,6 +157,7 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 200, timeout=12000):
             pass
         expect(p.locator('#save-status')).to_contain_text('revision')
+        p.get_by_role('button', name='Box (B)', exact=True).click()
         p.mouse.move(*point(.5, .5)); p.mouse.down(); p.mouse.move(*point(.7, .7), steps=5); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('2')
         p.reload()
