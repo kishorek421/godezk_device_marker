@@ -503,7 +503,7 @@ def distribute(request, pk):
         tasks = tasks.filter(assignee__isnull=True)
     elif scope != 'all':
         raise Invalid('Invalid distribution scope')
-    tasks = list(tasks.order_by('id'))
+    tasks = list(tasks.order_by('?' if request.data.get('shuffle') is True else 'id'))
     if not tasks:
         raise Invalid('Nothing to distribute')
     now = timezone.now()

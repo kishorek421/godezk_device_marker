@@ -272,6 +272,12 @@ class WorkflowTests(TestCase):
         self.assertTrue(Event.objects.filter(project=self.project, action='tasks.distributed').exists())
         r = self.post(url, {'user_ids': [self.worker.pk], 'scope': 'unassigned'})
         self.assertEqual(r.status_code, 400)
+        for name, color in [('six.png', 'cyan'), ('seven.png', 'gray')]:
+            self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image(name, color)})
+        r = self.post(url, {'user_ids': [self.worker.pk, self.reviewer.pk], 'scope': 'unassigned', 'shuffle': True})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(Task.objects.filter(project=self.project, assignee=self.worker).count(), 4)
+        self.assertEqual(Task.objects.filter(project=self.project, assignee=self.reviewer).count(), 3)
 
     def test_progress_report_on_project_page(self):
         task = self.upload()
