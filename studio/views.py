@@ -356,8 +356,8 @@ def upload(request, pk):
         digest = hashlib.sha256(raw).hexdigest()
         try:
             with Image.open(io.BytesIO(raw)) as image:
-                if image.format not in ['PNG', 'JPEG', 'WEBP'] or image.width * image.height > 40_000_000:
-                    raise Invalid('Use PNG, JPEG, or WebP images under 40 megapixels')
+                if image.format not in ['PNG', 'JPEG', 'WEBP', 'BMP', 'GIF', 'TIFF'] or image.width * image.height > 40_000_000:
+                    raise Invalid('Use PNG, JPEG, WebP, BMP, GIF, or TIFF images under 40 megapixels')
                 image.load()
                 width, height = image.size
                 output = io.BytesIO()

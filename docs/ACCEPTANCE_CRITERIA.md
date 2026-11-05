@@ -12,7 +12,8 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 
 ## Upload pipeline
 
-- AC6 Accept PNG/JPEG/WebP ≤20 MB ≤40 MP; ≤30 per request (client
+- AC6 Accept PNG/JPEG/WebP/BMP/GIF/TIFF ≤20 MB ≤40 MP (re-encoded to
+  JPEG — BMP/GIF/TIFF converted server-side); ≤30 per request (client
   chunks larger selections — see AC50); else 400. ✅
 - AC7 Non-image / corrupt payloads rejected (Pillow verify + load). ✅
 - AC8 Identical bytes (SHA-256) can't upload twice per project → 400. ✅

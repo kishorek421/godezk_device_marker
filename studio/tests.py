@@ -389,6 +389,12 @@ class WorkflowTests(TestCase):
         bad = SimpleUploadedFile('fake.png', b'<script>bad</script>', content_type='image/png')
         self.assertEqual(self.client.post(f'/projects/{self.project.pk}/upload/', {'images': bad}).status_code, 400)
         self.assertEqual(self.project.tasks.count(), 1)
+        # BMP/GIF/TIFF accepted and re-encoded to JPEG
+        for fmt in ('BMP', 'GIF', 'TIFF'):
+            buf = io.BytesIO(); Image.new('RGB', (20, 20), 'teal').save(buf, fmt)
+            r = self.client.post(f'/projects/{self.project.pk}/upload/',
+                                 {'images': SimpleUploadedFile(f't.{fmt.lower()}', buf.getvalue())})
+            self.assertEqual(r.status_code, 200, f'{fmt}: {r.content}')
 
     def test_attribute_options_are_enforced(self):
         lamp = Label.objects.create(project=self.project, key='lamp', name='Lamp', attributes=[
