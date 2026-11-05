@@ -20,13 +20,15 @@
   const dirPicker = document.getElementById('dir-picker');
   document.getElementById('pick-dir').onclick = () => dirPicker.click();
   dirPicker.onchange = () => {
-    const picked = [...dirPicker.files].filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(f.name));
-    const skipped = dirPicker.files.length - picked.length;
+    const image = f => f.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(f.name);
+    const picked = [...dirPicker.files].filter(image);
+    const skipped = [...dirPicker.files].filter(f => !image(f)).map(f => f.name);
     const dt = new DataTransfer();
     [...imagesInput.files, ...picked].forEach(f => dt.items.add(f));
     imagesInput.files = dt.files;
     dirPicker.value = '';
-    notify(`Added ${picked.length} image${picked.length === 1 ? '' : 's'} from folder${skipped ? ` — ${skipped} non-image${skipped === 1 ? '' : 's'} skipped` : ''}`);
+    const names = skipped.slice(0, 4).join(', ') + (skipped.length > 4 ? ` +${skipped.length - 4} more` : '');
+    notify(`Added ${picked.length} image${picked.length === 1 ? '' : 's'} from folder${skipped.length ? ` — skipped: ${names}` : ''}`, picked.length === 0);
   };
   document.getElementById('distribute').onclick = async event => {
     const user_ids = [...document.querySelectorAll('.dist-user')].filter(c => c.checked).map(c => +c.value);
