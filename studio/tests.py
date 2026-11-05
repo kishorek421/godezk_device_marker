@@ -256,6 +256,8 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.client.get(f'/projects/{empty.pk}/spot-check/')['Location'], f'/projects/{empty.pk}/')
 
     def test_distribute_evenly_splits_tasks(self):
+        worker2 = get_user_model().objects.create_user('worker2', password='Test-worker-923!')
+        Membership.objects.create(workspace=self.workspace, user=worker2, role='annotator')
         self.upload()
         for name, color in [('two.png', 'blue'), ('three.png', 'green'), ('four.png', 'white'), ('five.png', 'black')]:
             self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image(name, color)})
@@ -265,19 +267,21 @@ class WorkflowTests(TestCase):
         self.client.force_login(self.owner)
         self.assertEqual(self.post(url, {'user_ids': [], 'scope': 'unassigned'}).status_code, 400)
         self.assertEqual(self.post(url, {'user_ids': [self.worker.pk], 'scope': 'bogus'}).status_code, 400)
-        r = self.post(url, {'user_ids': [self.worker.pk, self.reviewer.pk], 'scope': 'unassigned'})
+        # Non-annotator members cannot receive distributed tasks
+        self.assertEqual(self.post(url, {'user_ids': [self.worker.pk, self.reviewer.pk], 'scope': 'unassigned'}).status_code, 400)
+        r = self.post(url, {'user_ids': [self.worker.pk, worker2.pk], 'scope': 'unassigned'})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(Task.objects.filter(project=self.project, assignee=self.worker).count(), 3)
-        self.assertEqual(Task.objects.filter(project=self.project, assignee=self.reviewer).count(), 2)
+        self.assertEqual(Task.objects.filter(project=self.project, assignee=worker2).count(), 2)
         self.assertTrue(Event.objects.filter(project=self.project, action='tasks.distributed').exists())
         r = self.post(url, {'user_ids': [self.worker.pk], 'scope': 'unassigned'})
         self.assertEqual(r.status_code, 400)
         for name, color in [('six.png', 'cyan'), ('seven.png', 'gray')]:
             self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image(name, color)})
-        r = self.post(url, {'user_ids': [self.worker.pk, self.reviewer.pk], 'scope': 'unassigned', 'shuffle': True})
+        r = self.post(url, {'user_ids': [self.worker.pk, worker2.pk], 'scope': 'unassigned', 'shuffle': True})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(Task.objects.filter(project=self.project, assignee=self.worker).count(), 4)
-        self.assertEqual(Task.objects.filter(project=self.project, assignee=self.reviewer).count(), 3)
+        self.assertEqual(Task.objects.filter(project=self.project, assignee=worker2).count(), 3)
 
     def test_progress_report_on_project_page(self):
         task = self.upload()

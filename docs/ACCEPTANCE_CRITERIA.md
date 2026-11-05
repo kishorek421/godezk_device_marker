@@ -123,9 +123,10 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
 - AC60 `AWS_STORAGE_BUCKET_NAME` switches private uploads to S3 via
   django-storages; filesystem stays default. 🟡 (config, untested w/o S3)
 - AC61 `POST /projects/<id>/distribute/` splits tasks round-robin across
-  chosen members — `unassigned` (default) or `all` editable scope;
-  `shuffle` randomizes task order before splitting; submitted/approved
-  always excluded; atomic bulk update + audit. ✅
+  chosen annotators (non-annotator roles rejected — 400) — `unassigned`
+  (default) or `all` editable scope; `shuffle` randomizes task order
+  before splitting; submitted/approved always excluded; atomic bulk
+  update + audit. ✅
 
 ## Gap backlog
 

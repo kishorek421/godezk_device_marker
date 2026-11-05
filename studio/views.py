@@ -344,7 +344,10 @@ def upload(request, pk):
     assignee = None
     assign_to = request.data.get('assign_to')
     if assign_to:
-        assignee = get_object_or_404(Membership, workspace=p.workspace, user_id=assign_to).user
+        target = get_object_or_404(Membership, workspace=p.workspace, user_id=assign_to)
+        if target.role != 'annotator':
+            raise Invalid('Tasks can only be assigned to annotators')
+        assignee = target.user
     prepared = []
     for f in files:
         if f.size > 20 * 1024 * 1024:
@@ -470,6 +473,8 @@ def save(request, pk):
 def bulk_assign(request, pk):
     p, _ = project_access(request, pk, ['owner', 'reviewer'])
     target = get_object_or_404(Membership, workspace=p.workspace, user_id=request.data['user'])
+    if target.role != 'annotator':
+        raise Invalid('Tasks can only be assigned to annotators')
     ids = request.data.get('task_ids')
     if not isinstance(ids, list) or not 0 < len(ids) <= 200 or any(type(i) is not int for i in ids):
         raise Invalid('Choose between 1 and 200 tasks')
@@ -497,6 +502,8 @@ def distribute(request, pk):
     members = list(Membership.objects.filter(workspace=p.workspace, user_id__in=ids).select_related('user'))
     if len({m.user_id for m in members}) != len(set(ids)):
         raise Invalid('Some selected members are not in this workspace')
+    if any(m.role != 'annotator' for m in members):
+        raise Invalid('Tasks can only be distributed to annotators')
     scope = request.data.get('scope', 'unassigned')
     tasks = p.tasks.exclude(state__in=['submitted', 'approved'])
     if scope == 'unassigned':
@@ -523,6 +530,8 @@ def assign(request, pk):
     if m.role not in ['owner', 'reviewer']:
         return JsonResponse({'error': 'Only managers can assign tasks'}, status=403)
     target = get_object_or_404(Membership, workspace=t.project.workspace, user_id=request.data['user'])
+    if target.role != 'annotator':
+        raise Invalid('Tasks can only be assigned to annotators')
     if t.state in ['submitted', 'approved']:
         raise Invalid('Submitted and approved tasks cannot be reassigned')
     revision = request.data.get('revision')
