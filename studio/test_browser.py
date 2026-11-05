@@ -61,7 +61,7 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         expect(p.get_by_text('switch · state', exact=True)).to_be_visible()
         output = io.BytesIO()
         Image.new('RGB', (900, 600), '#d8e0ec').save(output, 'PNG')
-        p.locator('input[type=file]').set_input_files({'name': 'switch-panel.png', 'mimeType': 'image/png', 'buffer': output.getvalue()})
+        p.locator('input[name=images]').set_input_files({'name': 'switch-panel.png', 'mimeType': 'image/png', 'buffer': output.getvalue()})
         with p.expect_navigation():
             p.get_by_role('button', name='Upload to dataset').click()
         p.locator('.assign select').select_option(str(self.worker.pk))
@@ -181,8 +181,25 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         p = self.page
         self.login('manager', 'Browser-manager-482!')
         p.goto(self.live_server_url + f'/projects/{project.pk}/')
-        p.locator('input[type=file]').set_input_files(buffers)
+        p.locator('input[name=images]').set_input_files(buffers)
         p.get_by_role('button', name='Upload to dataset').click()
         expect(p.locator('.sectionhead .muted').first).to_contain_text('35 items', timeout=30000)
         self.assertEqual(Task.objects.filter(project=project).count(), 35)
+        self.assertEqual(self.errors, [])
+
+    def test_folder_upload_in_browser(self):
+        project = Project.objects.create(workspace=self.workspace, name='Folder lab')
+        folder = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__('shutil').rmtree(folder, ignore_errors=True))
+        for i in range(4):
+            Image.new('RGB', (32, 32), (i * 60 % 256, 100, 50)).save(os.path.join(folder, f'f{i}.png'))
+        open(os.path.join(folder, 'notes.txt'), 'w').write('not an image')
+        p = self.page
+        self.login('manager', 'Browser-manager-482!')
+        p.goto(self.live_server_url + f'/projects/{project.pk}/')
+        p.locator('#dir-picker').set_input_files(folder)
+        expect(p.locator('input[name=images]')).to_have_js_property('files.length', 4)
+        p.get_by_role('button', name='Upload to dataset').click()
+        expect(p.locator('.sectionhead .muted').first).to_contain_text('4 items', timeout=30000)
+        self.assertEqual(Task.objects.filter(project=project).count(), 4)
         self.assertEqual(self.errors, [])

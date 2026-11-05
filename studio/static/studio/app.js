@@ -38,11 +38,11 @@ document.querySelectorAll('form[data-api]:not([data-chunk])').forEach(form => fo
 }));
 document.querySelectorAll('form[data-chunk]').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault();
-  const input = form.querySelector('input[type=file]');
+  const input = form.querySelector('input[type=file][name=images]') || form.querySelector('input[type=file]');
   const files = Array.from(input?.files || []);
   if (!files.length) return;
   const size = Number(form.dataset.chunk) || 30;
-  const button = form.querySelector('button');
+  const button = form.querySelector('button:not([type]), button[type=submit]');
   const progress = form.querySelector('[data-progress]');
   const csrf = form.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
   const assignee = form.querySelector('[name=assign_to]')?.value;
