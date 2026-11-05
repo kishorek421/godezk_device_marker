@@ -203,3 +203,13 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         expect(p.locator('.sectionhead .muted').first).to_contain_text('4 items', timeout=30000)
         self.assertEqual(Task.objects.filter(project=project).count(), 4)
         self.assertEqual(self.errors, [])
+
+    def test_back_navigation_shows_fresh_state_in_browser(self):
+        p = self.page
+        self.login('manager', 'Browser-manager-482!')
+        p.get_by_label('Project name', exact=True).fill('Back nav lab')
+        p.get_by_role('button', name='Create project').click()
+        p.wait_for_url('**/projects/*/')
+        p.go_back()
+        expect(p.get_by_text('Back nav lab', exact=True)).to_be_visible()
+        self.assertEqual(self.errors, [])

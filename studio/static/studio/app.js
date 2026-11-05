@@ -14,6 +14,11 @@ window.apiRequest = async (url, body, json = true) => {
   if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 };
+// Pages restored from the back-forward cache show pre-navigation state
+// (e.g. a just-created project missing). Reload to fetch fresh HTML.
+window.addEventListener('pageshow', event => {
+  if (event.persisted) location.reload();
+});
 document.querySelectorAll('form[data-api]:not([data-chunk])').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault();
   const button = form.querySelector('button');
