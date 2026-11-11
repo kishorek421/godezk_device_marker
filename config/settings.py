@@ -157,6 +157,10 @@ if os.environ.get('POSTGRES_DB'):
         'PASSWORD': os.environ['POSTGRES_PASSWORD'],
         'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
+        'OPTIONS': {
+            'sslmode': os.environ.get('POSTGRES_SSLMODE', 'prefer'),
+        },
     }
 
 # Object storage (S3-compatible). Set AWS_STORAGE_BUCKET_NAME + credentials
