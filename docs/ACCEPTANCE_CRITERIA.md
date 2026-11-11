@@ -129,6 +129,31 @@ Status key: ✅ implemented+tested · 🟡 implemented, untested · ❌ gap.
   before splitting; submitted/approved always excluded; atomic bulk
   update + audit. ✅
 
+## Phase 5 — production hardening
+
+- AC62 Job queue (`studio_job`): `manage.py runworker` polls `run_pending`;
+  atomic claim, exponential backoff retry, `max_attempts` (default 3),
+  then `dead` dead-letter — nothing silently lost. ✅
+- AC63 Worker crash recovery: jobs stuck `running` > 10 min are reclaimed
+  to `pending` on the next `run_pending` pass. ✅
+- AC64 Failed webhook deliveries enqueue `webhook.deliver` jobs and are
+  retried by the worker; `WebhookDelivery` records outcome. ✅
+- AC65 `manage.py backupdata` writes a `.tar.gz` of the SQL dump + media;
+  `manage.py restoredata` rebuilds DB + files (verified roundtrip). ✅
+- AC66 `GET /health/`: anon gets `{status}` only; superuser gets DB ping,
+  project/task counts, `jobs_pending`, `jobs_dead`, `deliveries_failed`
+  — the alert surface for queue growth, worker and export failures. ✅
+- AC67 DB indexes: `Task(project,state)`, `Task(project,assignee)`,
+  `Event(project,created_at)`, `Event(project,action)`,
+  `Job(status,run_after)` for queue/review/audit hot paths. ✅
+- AC68 SQLite concurrency: WAL mode + busy timeout + request-level retry
+  on `database is locked`; 8 racing reviewers → exactly one decision,
+  losers get clean 409 — verified by real-thread test on file-backed
+  test DB. ✅
+- AC69 `manage.py loadtest`: bulk-creates tasks then fires N-way
+  concurrent saves through the revision-guard update; reports
+  throughput and p50/p95/p99 latency plus queue/review query times. ✅
+
 ## Gap backlog
 
 | ID | Gap | Status |

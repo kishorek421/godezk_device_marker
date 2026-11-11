@@ -1,19 +1,42 @@
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 
 # Create your tests here.
 
+import concurrent.futures
 import hashlib
 import hmac
 import io
 import json
+import os
+import shutil
+import sqlite3
+import tarfile
 import tempfile
 import zipfile
+from datetime import timedelta
 from unittest import mock
 from PIL import Image
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.signals import request_finished
+from django.db import close_old_connections
 from django.test import override_settings, Client
-from .models import Workspace, Membership, Project, Label, Task, Release, Event, ApiToken, Webhook, WebhookDelivery
+from django.utils import timezone
+from .models import Workspace, Membership, Project, Label, Task, Release, Event, ApiToken, Webhook, WebhookDelivery, Job
+from .jobs import run_pending
+
+
+def close_response(response):
+    """Close a streamed response without firing request_finished's
+    close_old_connections, which would kill the connection inside a
+    TestCase's atomic block on file-backed test databases."""
+    request_finished.disconnect(close_old_connections)
+    try:
+        response.close()
+    finally:
+        request_finished.connect(close_old_connections)
 
 
 class WorkflowTests(TestCase):
@@ -201,7 +224,7 @@ class WorkflowTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         body = b''.join(response.streaming_content)
-        response.close()
+        close_response(response)
         archive = zipfile.ZipFile(io.BytesIO(body))
         names = archive.namelist()
         self.assertIn('annotations.json', names)
@@ -325,7 +348,7 @@ class WorkflowTests(TestCase):
         response = self.client.get(f'/releases/{release.pk}/yolo/')
         self.assertEqual(response.status_code, 200)
         body = b''.join(response.streaming_content)
-        response.close()
+        close_response(response)
         archive = zipfile.ZipFile(io.BytesIO(body))
         names = archive.namelist()
         self.assertIn('data.yaml', names)
@@ -366,7 +389,7 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.post(url, {'url': 'https://x.test/hook'}).status_code, 200)
         hook = self.project.webhooks.get()
         task = self.upload()
-        with mock.patch('studio.views.urllib.request.urlopen') as fake:
+        with mock.patch('studio.jobs.urllib.request.urlopen') as fake:
             fake.return_value.__enter__.return_value.status = 200
             with self.captureOnCommitCallbacks(execute=True):
                 self.post(f'/tasks/{task.pk}/save/', {'revision': 0, 'annotation': self.annotation()})
@@ -376,12 +399,71 @@ class WorkflowTests(TestCase):
         delivery = WebhookDelivery.objects.get()
         self.assertEqual(delivery.status, 'delivered')
         self.assertEqual(delivery.response_code, 200)
-        with mock.patch('studio.views.urllib.request.urlopen', side_effect=OSError('down')):
+        with mock.patch('studio.jobs.urllib.request.urlopen', side_effect=OSError('down')):
             with self.captureOnCommitCallbacks(execute=True):
                 self.post(f'/tasks/{task.pk}/comment/', {'note': 'hi'})
         self.assertEqual(WebhookDelivery.objects.filter(status='failed').count(), 1)
         self.assertEqual(self.post(f'/projects/{self.project.pk}/webhooks/{hook.pk}/delete/', {}).status_code, 200)
         self.assertEqual(self.project.webhooks.count(), 0)
+
+    def test_failed_webhook_is_retried_by_worker(self):
+        Webhook.objects.create(project=self.project, url='https://hook.test/x', secret='s')
+        task = self.upload()
+        with mock.patch('studio.jobs.urllib.request.urlopen', side_effect=OSError('down')):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.post(f'/tasks/{task.pk}/assign/', {'user': self.worker.pk, 'revision': 0})
+        delivery = WebhookDelivery.objects.get()
+        self.assertEqual(delivery.status, 'failed')
+        job = Job.objects.get()
+        self.assertEqual((job.type, job.status), ('webhook.deliver', 'pending'))
+        with mock.patch('studio.jobs.urllib.request.urlopen') as fake:
+            fake.return_value.__enter__.return_value.status = 200
+            self.assertEqual(run_pending(), 1)
+        delivery.refresh_from_db()
+        job.refresh_from_db()
+        self.assertEqual(delivery.status, 'delivered')
+        self.assertEqual(job.status, 'done')
+
+    def test_permanently_failing_job_is_dead_lettered(self):
+        Webhook.objects.create(project=self.project, url='https://hook.test/x', secret='s')
+        delivery = WebhookDelivery.objects.create(webhook=self.project.webhooks.get(), action='x', status='failed')
+        job = Job.objects.create(type='webhook.deliver', payload={'delivery_id': str(delivery.pk), 'body': {'event': 'x'}}, max_attempts=2)
+        with mock.patch('studio.jobs.urllib.request.urlopen', side_effect=OSError('down')):
+            self.assertEqual(run_pending(), 1)
+            job.refresh_from_db()
+            self.assertEqual(job.status, 'pending')  # first failure → scheduled retry
+            self.assertEqual(run_pending(), 0)       # backoff holds it
+            job.run_after = timezone.now()
+            job.save(update_fields=['run_after'])
+            self.assertEqual(run_pending(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'dead')
+        self.assertEqual(job.attempts, 2)
+
+    def test_backup_archive_is_restorable(self):
+        task = self.upload()
+        out = os.path.join(self.directory.name, 'backups')
+        call_command('backupdata', out=out)
+        archive = os.path.join(out, os.listdir(out)[0])
+        with tarfile.open(archive) as tar:
+            sql = tar.extractfile('db.sqlite3.sql').read().decode()
+            self.assertTrue(any(m.name.startswith('media/') for m in tar.getmembers()))
+        scratch = sqlite3.connect(':memory:')
+        scratch.executescript(sql)
+        count = scratch.execute('SELECT COUNT(*) FROM studio_task').fetchone()[0]
+        self.assertEqual(count, self.project.tasks.count())
+
+    def test_health_endpoint(self):
+        anon = Client()
+        r = anon.get('/health/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['status'], 'ok')
+        self.assertNotIn('tasks', r.json())  # detail is privileged
+        admin = get_user_model().objects.create_superuser('root', password='Test-root-923!')
+        anon.force_login(admin)
+        r = anon.get('/health/')
+        for key in ('projects', 'tasks', 'jobs_pending', 'jobs_dead', 'deliveries_failed'):
+            self.assertIn(key, r.json())
 
     def test_upload_validation_and_duplicate_detection(self):
         self.upload()
@@ -447,7 +529,7 @@ class WorkflowTests(TestCase):
         response = self.client.get(f'/tasks/{task.pk}/asset/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Cache-Control'], 'private, no-store')
-        response.close()
+        close_response(response)
 
     def test_bulk_assign(self):
         tasks = [self.upload()]
@@ -635,7 +717,7 @@ class IsolationTests(TestCase):
             self.assertEqual(self.client.get(path).status_code, 200, path)
         asset = self.client.get(f'/tasks/{self.task.pk}/asset/')
         self.assertEqual(asset.status_code, 200)
-        asset.close()
+        close_response(asset)
         annotation = {'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'point', 'points': [[.5, .5]], 'attributes': {}}], 'relations': []}
         response = self.client.post(f'/tasks/{self.task.pk}/save/', json.dumps({'revision': 0, 'annotation': annotation}), content_type='application/json')
         self.assertEqual(response.status_code, 200)
@@ -645,3 +727,77 @@ class IsolationTests(TestCase):
         self.client.logout()
         for path in ['/', f'/projects/{self.project.pk}/', f'/tasks/{self.task.pk}/', f'/tasks/{self.task.pk}/asset/', f'/releases/{self.release.pk}/']:
             self.assertEqual(self.client.get(path).status_code, 302, path)
+
+
+class ConcurrencyTests(TransactionTestCase):
+    """Phase 5: concurrent workers must not corrupt or double-decide work.
+    Uses TransactionTestCase so writes truly commit and threads race for real."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.override = override_settings(MEDIA_ROOT=self.directory.name)
+        self.override.enable()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(self.override.disable)
+        User = get_user_model()
+        self.owner = User.objects.create_user('owner', password='Test-owner-923!')
+        self.worker = User.objects.create_user('worker', password='Test-worker-923!')
+        self.reviewer = User.objects.create_user('reviewer', password='Test-reviewer-923!')
+        self.workspace = Workspace.objects.create(name='Lab')
+        for user, role in [(self.owner, 'owner'), (self.worker, 'annotator'), (self.reviewer, 'reviewer')]:
+            Membership.objects.create(workspace=self.workspace, user=user, role=role)
+        self.project = Project.objects.create(workspace=self.workspace, name='Race')
+        self.label = Label.objects.create(project=self.project, name='Switch', key='switch', attributes=[])
+
+    def test_concurrent_reviews_cannot_double_decide(self):
+        buffer = io.BytesIO()
+        Image.new('RGB', (60, 40), 'red').save(buffer, 'PNG')
+        task = Task.objects.create(project=self.project, filename='t.png', digest='race1', width=60, height=40, image='x.jpg',
+                                   state='submitted', assignee=self.worker, revision=1,
+                                   annotation={'regions': [{'id': 'a', 'label': str(self.label.pk), 'type': 'point', 'points': [[.5, .5]], 'attributes': {}}], 'relations': []})
+        session = Client()
+        session.force_login(self.reviewer)
+        cookie = session.cookies[settings.SESSION_COOKIE_NAME].value
+        results = []
+
+        def decide(_):
+            try:
+                c = Client()
+                c.cookies[settings.SESSION_COOKIE_NAME] = cookie
+                body = json.dumps({'decision': 'approved', 'revision': 1})
+                results.append(c.post(f'/tasks/{task.pk}/review/', body, content_type='application/json').status_code)
+            finally:
+                close_old_connections()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(decide, range(8)))
+        self.assertEqual(results.count(200), 1, results)
+        task.refresh_from_db()
+        self.assertEqual(task.state, 'approved')
+        self.assertEqual(Event.objects.filter(task=task, action='review.approved').count(), 1)
+
+    def test_crashed_worker_job_is_reclaimed(self):
+        from studio.jobs import HANDLERS
+        HANDLERS['test.noop'] = lambda job: {'ok': True}
+        self.addCleanup(HANDLERS.pop, 'test.noop')
+        job = Job.objects.create(type='test.noop', status='running', attempts=1, run_after=timezone.now())
+        Job.objects.filter(pk=job.pk).update(updated_at=timezone.now() - timedelta(minutes=11))
+        self.assertEqual(run_pending(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'done')
+
+    def test_backup_and_restore_roundtrip(self):
+        out = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, out, True)
+        call_command('backupdata', out=out)
+        archive = os.path.join(out, os.listdir(out)[0])
+        Task.objects.create(project=self.project, filename='t.png', digest='d1', width=10, height=10, image='x.jpg')
+        scratch_path = os.path.join(out, 'restored.sqlite3')
+        call_command('restoredata', archive, db=scratch_path)
+        scratch = sqlite3.connect(scratch_path)
+        try:
+            name = scratch.execute('SELECT name FROM studio_project WHERE id=?', (self.project.pk,)).fetchone()[0]
+            self.assertEqual(name, 'Race')
+            self.assertIsNone(scratch.execute('SELECT id FROM studio_task WHERE filename=?', ('t.png',)).fetchone())
+        finally:
+            scratch.close()

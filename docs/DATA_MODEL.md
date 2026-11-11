@@ -62,9 +62,15 @@ UUIDs on `Label` and `Release` so exports never expose sequential ids.
 - **Event.payload** — action-specific; save/submit embed the full
   annotation + schema_version (used for release provenance).
 - **Release.snapshot** — immutable JSON; a point-in-time export.
+- **Job** (Phase 5) — durable background queue: `type`, `payload` (JSON),
+  `status` (`pending|running|done|dead`), `attempts`/`max_attempts`,
+  `run_after` (backoff), `error`, `result`. Workers claim jobs
+  atomically; crashed workers' jobs are reclaimed after 10 min.
 
 ## Scale posture
 
-All indexes are the PKs + unique constraints shown. At the contract's
-design point (~10⁴ tasks/project) no additional indexing is needed; the
-hot path (queue by project, events by project) is covered by the FKs.
+Beyond PKs/uniques: `Task(project,state)` and `Task(project,assignee)`
+for the queue/assignment hot paths, `Event(project,created_at)` and
+`Event(project,action)` for audit/progress queries, and
+`Job(status,run_after)` for the worker poll. SQLite runs WAL +
+`busy_timeout` so concurrent writers serialize instead of failing.

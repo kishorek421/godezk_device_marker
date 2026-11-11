@@ -10,6 +10,7 @@ import math
 import re
 import secrets
 import tempfile
+import time
 import urllib.request
 import zipfile
 from datetime import timedelta
@@ -22,11 +23,13 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError
+from django.db.utils import OperationalError
 from django.db.models import Count
 from django.http import JsonResponse, FileResponse, HttpResponseForbidden
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from .models import Workspace, Membership, Project, Label, Task, Event, Release, ApiToken, Webhook, WebhookDelivery
+from .models import Workspace, Membership, Project, Label, Task, Event, Release, ApiToken, Webhook, WebhookDelivery, Job
+from .jobs import enqueue, post_signed
 
 
 class Invalid(Exception):
@@ -45,13 +48,21 @@ def api(fn):
                     raise Invalid('Expected an object')
             else:
                 request.data = request.POST
-            return fn(request, *args, **kwargs)
         except (Invalid, ValidationError) as exc:
             return JsonResponse({'error': str(exc)}, status=400)
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError, KeyError):
             return JsonResponse({'error': 'Invalid request data'}, status=400)
-        except IntegrityError:
-            return JsonResponse({'error': 'This key, username, or asset already exists.'}, status=409)
+        for attempt in range(4):
+            try:
+                return fn(request, *args, **kwargs)
+            except (Invalid, ValidationError) as exc:
+                return JsonResponse({'error': str(exc)}, status=400)
+            except IntegrityError:
+                return JsonResponse({'error': 'This key, username, or asset already exists.'}, status=409)
+            except OperationalError as exc:
+                if 'locked' not in str(exc) or attempt == 3:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     return wrapped
 
 
@@ -97,17 +108,33 @@ def event(request, project, action, task=None, payload=None):
 
 
 def deliver(hook, body):
-    raw = json.dumps(body).encode()
-    signature = hmac.new(hook.secret.encode(), raw, hashlib.sha256).hexdigest()
-    headers = {'Content-Type': 'application/json', 'X-Godezk-Event': body['event'], 'X-Godezk-Signature': f'sha256={signature}'}
     delivery = {'webhook': hook, 'action': body['event'], 'status': 'failed', 'response_code': None, 'error': ''}
     try:
-        with urllib.request.urlopen(urllib.request.Request(hook.url, data=raw, headers=headers), timeout=5) as response:
-            delivery['response_code'] = response.status
-            delivery['status'] = 'delivered' if 200 <= response.status < 300 else 'failed'
+        code = post_signed(hook.url, hook.secret, body)
+        delivery['response_code'] = code
+        delivery['status'] = 'delivered' if 200 <= code < 300 else 'failed'
     except Exception as exc:
         delivery['error'] = str(exc)[:300]
-    WebhookDelivery.objects.create(**delivery)
+    d = WebhookDelivery.objects.create(**delivery)
+    if d.status != 'delivered':
+        enqueue('webhook.deliver', {'delivery_id': str(d.pk), 'body': body})
+
+
+def health(request):
+    try:
+        Workspace.objects.exists()
+    except Exception:
+        return JsonResponse({'status': 'error', 'db': 'unreachable'}, status=503)
+    data = {'status': 'ok', 'db': 'ok'}
+    if request.user.is_superuser:
+        data.update({
+            'projects': Project.objects.count(),
+            'tasks': Task.objects.count(),
+            'jobs_pending': Job.objects.filter(status='pending').count(),
+            'jobs_dead': Job.objects.filter(status='dead').count(),
+            'deliveries_failed': WebhookDelivery.objects.filter(status='failed').count(),
+        })
+    return JsonResponse(data)
 
 
 @login_required

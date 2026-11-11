@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 import uuid
 
 # Create your models here.
@@ -66,6 +67,7 @@ class Task(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['project', 'digest'], name='unique_project_asset')]
+        indexes = [models.Index(fields=['project', 'state']), models.Index(fields=['project', 'assignee'])]
 
 
 class Event(models.Model):
@@ -75,6 +77,9 @@ class Event(models.Model):
     action = models.CharField(max_length=40)
     payload = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['project', 'created_at']), models.Index(fields=['project', 'action'])]
 
 
 class Release(models.Model):
@@ -115,3 +120,20 @@ class WebhookDelivery(models.Model):
     response_code = models.PositiveIntegerField(null=True)
     error = models.CharField(max_length=300, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Job(models.Model):
+    STATUSES = [('pending', 'Pending'), ('running', 'Running'), ('done', 'Done'), ('dead', 'Dead')]
+    type = models.CharField(max_length=40)
+    status = models.CharField(max_length=12, choices=STATUSES, default='pending', db_index=True)
+    payload = models.JSONField(default=dict)
+    result = models.JSONField(default=dict)
+    attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=3)
+    error = models.CharField(max_length=500, blank=True)
+    run_after = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['status', 'run_after'])]
