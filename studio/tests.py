@@ -528,8 +528,13 @@ class WorkflowTests(TestCase):
             self.assertEqual(self.client.get(path).status_code, 200, path)
         response = self.client.get(f'/tasks/{task.pk}/asset/')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Cache-Control'], 'private, no-store')
+        self.assertEqual(response['Cache-Control'], 'private, max-age=3600')
         close_response(response)
+
+    def test_asset_missing_file_returns_404(self):
+        task = self.upload()
+        task.image.storage.delete(task.image.name)
+        self.assertEqual(self.client.get(f'/tasks/{task.pk}/asset/').status_code, 404)
 
     def test_bulk_assign(self):
         tasks = [self.upload()]

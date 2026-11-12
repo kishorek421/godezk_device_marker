@@ -25,7 +25,7 @@ from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError
 from django.db.utils import OperationalError
 from django.db.models import Count
-from django.http import JsonResponse, FileResponse, HttpResponseForbidden
+from django.http import JsonResponse, FileResponse, HttpResponseForbidden, Http404
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from .models import Workspace, Membership, Project, Label, Task, Event, Release, ApiToken, Webhook, WebhookDelivery, Job
@@ -404,6 +404,8 @@ def upload(request, pk):
 @login_required
 def asset(request, pk):
     task, _ = task_access(request, pk)
+    if not task.image or not task.image.storage.exists(task.image.name):
+        raise Http404('Image file is missing from storage')
     response = FileResponse(task.image.open('rb'), content_type='image/jpeg')
     response['Cache-Control'] = 'private, max-age=3600'
     response['X-Content-Type-Options'] = 'nosniff'

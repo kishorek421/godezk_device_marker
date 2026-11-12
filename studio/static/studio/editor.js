@@ -272,5 +272,14 @@
   document.addEventListener('keyup', event => {
     if (event.key === ' ') { panning = false; panOrigin = null; svg.style.cursor = tool === 'select' ? 'default' : 'crosshair'; }
   });
+  const sourceImage = $('source-image');
+  sourceImage.addEventListener('error', () => {
+    sourceImage.style.display = 'none';
+    const missing = document.createElement('div');
+    missing.className = 'image-missing';
+    missing.textContent = 'Image file is missing from storage — this task cannot be annotated.';
+    $('stage').appendChild(missing);
+    notify('Image file is missing — pick another task.', true);
+  });
   render();
 })();
