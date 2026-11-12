@@ -202,6 +202,7 @@ def project_page(request, pk):
     from .agents import PREDICTORS
     return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': members, 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES, 'progress': progress,
                                                    'predictors': sorted(PREDICTORS),
+                                                   'agent_config_json': json.dumps(p.agent_config or {}),
                                                    'api_tokens': p.workspace.api_tokens.filter(revoked=False).select_related('user'),
                                                    'webhooks': hooks})
 
