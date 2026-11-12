@@ -405,7 +405,7 @@ def upload(request, pk):
 def asset(request, pk):
     task, _ = task_access(request, pk)
     response = FileResponse(task.image.open('rb'), content_type='image/jpeg')
-    response['Cache-Control'] = 'private, no-store'
+    response['Cache-Control'] = 'private, max-age=3600'
     response['X-Content-Type-Options'] = 'nosniff'
     return response
 

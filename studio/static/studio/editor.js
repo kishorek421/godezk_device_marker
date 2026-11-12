@@ -219,8 +219,10 @@
   };
   function setZoom(value) { zoom = Math.max(1, Math.min(4, value)); $('stage').style.width = `${zoom * 100}%`; $('zoom-level').textContent = `${Math.round(zoom * 100)}%`; }
   $('zoom-in').onclick = () => setZoom(zoom + .25); $('zoom-out').onclick = () => setZoom(zoom - .25);
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   async function save(submit = false) {
-    if (saving || blocked || !config.editable) return false;
+    while (saving) await sleep(50);
+    if (blocked || !config.editable) return false;
     if (draft.length) { notify('Finish the polygon with Enter, or cancel with Escape.', true); return false; }
     if (!dirty && !submit) return true;
     saving = true; const sentGeneration = generation; status('Saving…');
@@ -247,10 +249,14 @@
       const missing = (labels.get(r.label)?.attributes || []).map(a => typeof a === 'string' ? a : a.key).filter(k => !(r.attributes?.[k] || '').trim());
       if (missing.length) issues.push(`Region ${i + 1}: empty ${missing.join(', ')}`);
     });
-    const message = issues.length ? `Warnings:\n${issues.slice(0, 10).join('\n')}${issues.length > 10 ? '\n…' : ''}\n\nSubmit anyway?` : 'Submit this annotation for review?';
-    if (!confirm(message)) return;
+    if (issues.length && !confirm(`Warnings:\n${issues.slice(0, 10).join('\n')}${issues.length > 10 ? '\n…' : ''}\n\nSubmit anyway?`)) return;
+    $('submit-next').disabled = true;
+    status('Submitting…');
     if (await save(true)) location.href = config.next_id ? `/tasks/${config.next_id}/` : `/projects/${config.project_id}/`;
+    else $('submit-next').disabled = false;
   };
+  // Warm the browser cache with the next task's image so advancing feels instant
+  if (config.next_id) { const prefetch = new Image(); prefetch.src = `/tasks/${config.next_id}/asset/`; }
   setInterval(() => { if (dirty && !drag && !draft.length) save(); }, 5000);
   window.addEventListener('beforeunload', event => { if (dirty || saving) { event.preventDefault(); event.returnValue = ''; } });
   document.addEventListener('keydown', event => {
