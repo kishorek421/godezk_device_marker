@@ -490,6 +490,53 @@ class WorkflowTests(TestCase):
         self.assertEqual(job.status, 'dead')
         self.assertIn('Unknown predictor', job.error)
 
+    def test_autolabel_unannotated_scope_skips_annotated(self):
+        task = self.upload()
+        task.annotation = self.annotation()
+        task.save(update_fields=['annotation'])
+        other = Task.objects.create(project=self.project, filename='b.png', digest='b2', width=1, height=1, image='x.jpg')
+        self.project.agent_predictor = 'http'
+        self.project.save(update_fields=['agent_predictor'])
+        result = self.post(f'/projects/{self.project.pk}/autolabel/', {'scope': 'unannotated'})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['queued'], 1)
+        job = Job.objects.get(type='agent.propose')
+        self.assertEqual(job.payload['task_id'], other.pk)
+        self.assertFalse(job.payload['overwrite'])
+
+    def test_proposal_decision_accept_and_undo(self):
+        task = self.upload()
+        task.assignee = self.worker
+        task.save(update_fields=['assignee'])
+        proposal = Event.objects.create(project=self.project, task=task, action='agent.proposed',
+                                        payload={'previous': {'regions': [], 'relations': []}, 'previous_state': 'open', 'regions': 2})
+        task.annotation = self.annotation()
+        task.state = 'in_progress'
+        task.save(update_fields=['annotation', 'state'])
+        self.client.force_login(self.worker)
+        # annotator can undo
+        result = self.post(f'/tasks/{task.pk}/proposal/', {'decision': 'undo'})
+        self.assertEqual(result.status_code, 200, result.content)
+        task.refresh_from_db()
+        self.assertEqual(task.annotation['regions'], [])
+        self.assertEqual(task.state, 'open')
+        self.assertTrue(Event.objects.filter(action='agent.undone').exists())
+        # decided proposals can't be decided again
+        self.assertEqual(self.post(f'/tasks/{task.pk}/proposal/', {'decision': 'accept'}).status_code, 400)
+
+    def test_proposal_decision_owner_can_accept(self):
+        task = self.upload()
+        Event.objects.create(project=self.project, task=task, action='agent.proposed', payload={'regions': 1})
+        result = self.post(f'/tasks/{task.pk}/proposal/', {'decision': 'accept'})
+        self.assertEqual(result.status_code, 200, result.content)
+        self.assertTrue(Event.objects.filter(action='agent.accepted').exists())
+
+    def test_proposal_decision_requires_editable(self):
+        task = self.upload()
+        Event.objects.create(project=self.project, task=task, action='agent.proposed', payload={'regions': 1})
+        self.client.force_login(self.worker)  # not the assignee
+        self.assertEqual(self.post(f'/tasks/{task.pk}/proposal/', {'decision': 'undo'}).status_code, 403)
+
     def test_backup_archive_is_restorable(self):
         task = self.upload()
         out = os.path.join(self.directory.name, 'backups')

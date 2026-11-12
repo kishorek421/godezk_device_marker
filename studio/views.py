@@ -426,7 +426,11 @@ def editor(request, pk):
            'position': index + 1, 'total': len(siblings)}
     data = {'id': t.pk, 'revision': t.revision, 'annotation': t.annotation, 'labels': labels, 'editable': editable,
             'state': t.state, 'geometry': t.project.geometry, 'next_id': nav['next_id'], 'project_id': t.project_id}
-    return render(request, 'studio/editor.html', {'task': t, 'membership': m, 'editor_data': data, 'editable': editable, 'nav': nav, 'events': t.event_set.select_related('actor').order_by('-id')[:20]})
+    ai_proposal = None
+    proposal = t.event_set.filter(action='agent.proposed').order_by('-id').first()
+    if proposal and not t.event_set.filter(action__in=['agent.accepted', 'agent.undone'], id__gt=proposal.pk).exists():
+        ai_proposal = proposal.payload
+    return render(request, 'studio/editor.html', {'task': t, 'membership': m, 'editor_data': data, 'editable': editable, 'nav': nav, 'ai_proposal': ai_proposal, 'events': t.event_set.select_related('actor').order_by('-id')[:20]})
 
 
 def validate_annotation(value, project):
@@ -570,15 +574,52 @@ def autolabel(request, pk):
         p.agent_config = config
     p.agent_predictor = predictor_name
     p.save(update_fields=['agent_predictor', 'agent_config'])
+    scope = request.data.get('scope', 'unannotated')
     tasks = list(p.tasks.filter(state__in=['open', 'in_progress', 'changes_requested']).order_by('id'))
+    if scope == 'unannotated':
+        tasks = [t for t in tasks if not (t.annotation or {}).get('regions')]
+    elif scope != 'all':
+        raise Invalid('Invalid auto-label scope')
     if not tasks:
         raise Invalid('No tasks available for auto-labeling')
     if len(tasks) > 1000:
         raise Invalid('Maximum 1000 tasks per auto-label run')
     for t in tasks:
-        enqueue('agent.propose', {'task_id': t.pk})
-    event(request, p, 'agent.queued', payload={'predictor': predictor_name, 'tasks': len(tasks)})
+        enqueue('agent.propose', {'task_id': t.pk, 'overwrite': scope == 'all'})
+    event(request, p, 'agent.queued', payload={'predictor': predictor_name, 'tasks': len(tasks), 'scope': scope})
     return JsonResponse({'queued': len(tasks), 'reload': True})
+
+
+@api
+@transaction.atomic
+def proposal_decision(request, pk):
+    """Accept or undo the latest AI proposal on a task. Available to the
+    assignee (annotator) and owners/admins — same rule as editing."""
+    t, m = task_access(request, pk)
+    if t.state not in ['open', 'in_progress', 'changes_requested'] or (t.assignee_id != request.user.pk and m.role != 'owner'):
+        return JsonResponse({'error': 'Task is not editable by you'}, status=403)
+    proposal = t.event_set.filter(action='agent.proposed').order_by('-id').first()
+    if not proposal:
+        raise Invalid('No AI proposal on this task')
+    decided = t.event_set.filter(action__in=['agent.accepted', 'agent.undone'], id__gt=proposal.pk).exists()
+    if decided:
+        raise Invalid('This proposal was already decided')
+    decision = request.data.get('decision')
+    if decision == 'accept':
+        changed = Task.objects.filter(pk=t.pk, revision=t.revision, state=t.state).update(revision=t.revision + 1)
+        action = 'agent.accepted'
+    elif decision == 'undo':
+        previous = proposal.payload.get('previous') or {'regions': [], 'relations': []}
+        previous_state = proposal.payload.get('previous_state', 'open')
+        changed = Task.objects.filter(pk=t.pk, revision=t.revision, state=t.state).update(
+            annotation=previous, revision=t.revision + 1, state=previous_state)
+        action = 'agent.undone'
+    else:
+        raise Invalid('Decision must be accept or undo')
+    if not changed:
+        return JsonResponse({'error': 'Conflict: task changed. Reload and retry.'}, status=409)
+    event(request, t.project, action, t, {'proposal_event': proposal.pk})
+    return JsonResponse({'reload': True})
 
 
 @api

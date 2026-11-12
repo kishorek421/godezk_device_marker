@@ -209,3 +209,6 @@ footer span{letter-spacing:0;font-size:11px}
   .login-wrap{margin:-25px -16px}
 }
 .image-missing{padding:80px 20px;text-align:center;color:#f0b4b4;font-size:1.05rem;line-height:1.5}
+.ai-banner{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:10px 16px;background:#1d2e4a;border:1px solid #33507f;border-radius:8px;color:#cfe0ff;font-size:.92rem}
+.ai-banner code{color:#9fc3ff}
+.ai-actions{display:flex;gap:8px}

@@ -255,6 +255,15 @@
     if (await save(true)) location.href = config.next_id ? `/tasks/${config.next_id}/` : `/projects/${config.project_id}/`;
     else $('submit-next').disabled = false;
   };
+  const decide = async (decision, button) => {
+    button.disabled = true;
+    try {
+      await apiRequest(`/tasks/${config.id}/proposal/`, {decision});
+      location.reload();
+    } catch (error) { notify(error.message, true); button.disabled = false; }
+  };
+  if ($('ai-accept')) $('ai-accept').onclick = event => decide('accept', event.target);
+  if ($('ai-undo')) $('ai-undo').onclick = event => decide('undo', event.target);
   // Warm the browser cache with the next task's image so advancing feels instant
   if (config.next_id) { const prefetch = new Image(); prefetch.src = `/tasks/${config.next_id}/asset/`; }
   setInterval(() => { if (dirty && !drag && !draft.length) save(); }, 5000);

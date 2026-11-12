@@ -46,6 +46,7 @@ urlpatterns = [
     path('tasks/<int:pk>/', views.editor),
     path('tasks/<int:pk>/asset/', views.asset),
     path('tasks/<int:pk>/save/', views.save),
+    path('tasks/<int:pk>/proposal/', views.proposal_decision),
     path('tasks/<int:pk>/assign/', views.assign),
     path('tasks/<int:pk>/review/', views.review),
     path('tasks/<int:pk>/comment/', views.comment),

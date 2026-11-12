@@ -94,6 +94,10 @@ def propose_annotations(job):
     task = Task.objects.select_related('project').get(pk=job.payload['task_id'])
     if task.state not in ['open', 'in_progress', 'changes_requested']:
         return {'skipped': f'task state is {task.state}'}
+    overwrite = job.payload.get('overwrite') is True
+    previous = task.annotation or {}
+    if previous.get('regions') and not overwrite:
+        return {'skipped': 'task already has annotation regions'}
     predictor = PREDICTORS.get(task.project.agent_predictor)
     if not predictor:
         raise RuntimeError(f'Unknown predictor: {task.project.agent_predictor!r}')
@@ -106,5 +110,7 @@ def propose_annotations(job):
         return {'skipped': 'revision changed under us — requeue if still needed'}
     Event.objects.create(project=task.project, task=task, actor=None, action='agent.proposed',
                          payload={'predictor': task.project.agent_predictor,
-                                  'regions': len(annotation['regions']), 'confidence': confidence})
+                                  'regions': len(annotation['regions']), 'confidence': confidence,
+                                  'previous': previous or {'regions': [], 'relations': []},
+                                  'previous_state': task.state})
     return {'task': task.pk, 'regions': len(annotation['regions'])}
