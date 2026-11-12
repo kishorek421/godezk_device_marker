@@ -224,32 +224,32 @@
     if (draft.length) { notify('Finish the polygon with Enter, or cancel with Escape.', true); return false; }
     if (!dirty && !submit) return true;
     saving = true; const sentGeneration = generation; status('Saving…');
-    if ($('submit')) $('submit').disabled = true;
+    if ($('submit-next')) $('submit-next').disabled = true;
     try {
       const result = await apiRequest(`/tasks/${config.id}/save/`, {revision: config.revision, annotation: structuredClone(doc), submit});
       config.revision = result.revision;
       if (sentGeneration === generation) { dirty = false; try { localStorage.removeItem(storageKey); } catch {} }
       else cache();
       status(dirty ? 'Unsaved changes' : `Saved · revision ${result.revision}`);
-      if (result.submitted) { config.editable = false; location.reload(); }
-      return true;
+      if (result.submitted) config.editable = false;
+      return result;
     } catch (error) {
       status('Save failed · changes kept locally'); notify(error.message, true);
       if (error.message.startsWith('Conflict:')) blocked = true;
       return false;
-    } finally { saving = false; if ($('submit')) $('submit').disabled = false; }
+    } finally { saving = false; if ($('submit-next')) $('submit-next').disabled = false; }
   }
   if ($('save')) $('save').onclick = () => save();
-  if ($('save-next')) $('save-next').onclick = async () => { if (await save()) location.href = `/tasks/${config.next_id}/`; };
-  if ($('submit')) $('submit').onclick = () => {
+  if ($('submit-next')) $('submit-next').onclick = async () => {
     const issues = [];
     if (!doc.regions.length) issues.push('No regions drawn');
     doc.regions.forEach((r, i) => {
       const missing = (labels.get(r.label)?.attributes || []).map(a => typeof a === 'string' ? a : a.key).filter(k => !(r.attributes?.[k] || '').trim());
       if (missing.length) issues.push(`Region ${i + 1}: empty ${missing.join(', ')}`);
     });
-    const message = issues.length ? `Warnings:\n${issues.slice(0, 10).join('\n')}${issues.length > 10 ? '\n…' : ''}\n\nSubmit anyway?` : 'Submit this annotation for independent review?';
-    if (confirm(message)) save(true);
+    const message = issues.length ? `Warnings:\n${issues.slice(0, 10).join('\n')}${issues.length > 10 ? '\n…' : ''}\n\nSubmit anyway?` : 'Submit this annotation for review?';
+    if (!confirm(message)) return;
+    if (await save(true)) location.href = config.next_id ? `/tasks/${config.next_id}/` : `/projects/${config.project_id}/`;
   };
   setInterval(() => { if (dirty && !drag && !draft.length) save(); }, 5000);
   window.addEventListener('beforeunload', event => { if (dirty || saving) { event.preventDefault(); event.returnValue = ''; } });

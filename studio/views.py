@@ -421,7 +421,7 @@ def editor(request, pk):
            'next_id': siblings[index + 1] if index + 1 < len(siblings) else None,
            'position': index + 1, 'total': len(siblings)}
     data = {'id': t.pk, 'revision': t.revision, 'annotation': t.annotation, 'labels': labels, 'editable': editable,
-            'state': t.state, 'geometry': t.project.geometry, 'next_id': nav['next_id']}
+            'state': t.state, 'geometry': t.project.geometry, 'next_id': nav['next_id'], 'project_id': t.project_id}
     return render(request, 'studio/editor.html', {'task': t, 'membership': m, 'editor_data': data, 'editable': editable, 'nav': nav, 'events': t.event_set.select_related('actor').order_by('-id')[:20]})
 
 

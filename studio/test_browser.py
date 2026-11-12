@@ -111,9 +111,9 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         saved = json.loads(p.locator('#editor-data').text_content())
         self.assertEqual(saved['annotation']['regions'][0]['attributes']['state'], 'on')
         with p.expect_navigation():
-            p.get_by_role('button', name='Submit for review').click()
-        expect(p.locator('.status')).to_have_text('Submitted')
-        expect(p.get_by_role('button', name='Save', exact=True)).to_have_count(0)
+            p.get_by_role('button', name='Submit & Next').click()
+        # single task → submit+next lands back on the project page
+        expect(p.locator('td .status').first).to_have_text('Submitted')
         p.get_by_role('button', name='Sign out').click()
         self.login('quality', 'Browser-quality-482!')
         p.goto(self.live_server_url + f'/tasks/{task_id}/')
@@ -171,7 +171,7 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         expect(p.locator('#save-status')).to_contain_text('Save failed')
         self.assertEqual(self.errors, [])
 
-    def test_save_and_next_navigates_without_unsaved_changes(self):
+    def test_submit_and_next_is_one_click(self):
         project = Project.objects.create(workspace=self.workspace, name='Nav lab')
         Label.objects.create(project=project, key='device', name='Device', attributes=[])
         buffer = io.BytesIO()
@@ -185,11 +185,13 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         self.login('artist', 'Browser-artist-482!')
         p.goto(self.live_server_url + f'/tasks/{tasks[0].pk}/')
         p.locator('#source-image').wait_for()
-        # clean doc — nothing to save, but Save & Next must still advance
+        # one click: confirm → submit → advance (dialog auto-accepted)
         with p.expect_navigation():
-            p.get_by_role('button', name='Save & Next').click()
+            p.get_by_role('button', name='Submit & Next').click()
         self.assertIn(f'/tasks/{tasks[1].pk}/', p.url)
-        # dirty doc — saves first, then advances to task 3
+        tasks[0].refresh_from_db()
+        self.assertEqual(tasks[0].state, 'submitted')
+        # dirty doc — saves, submits, advances to task 3
         p.locator('#source-image').wait_for()
         bounds = p.locator('#overlay').bounding_box()
         p.get_by_role('button', name='Box (B)', exact=True).click()
@@ -200,8 +202,10 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         expect(p.locator('#region-count')).to_have_text('1')
         with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 200):
             with p.expect_navigation():
-                p.get_by_role('button', name='Save & Next').click()
+                p.get_by_role('button', name='Submit & Next').click()
         self.assertIn(f'/tasks/{tasks[2].pk}/', p.url)
+        tasks[1].refresh_from_db()
+        self.assertEqual(tasks[1].state, 'submitted')
         self.assertEqual(self.errors, [])
 
     def test_chunked_upload_in_browser(self):
