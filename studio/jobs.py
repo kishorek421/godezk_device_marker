@@ -14,7 +14,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from .models import Job, Webhook, WebhookDelivery
+from .models import Event, Job, Task, Webhook, WebhookDelivery
 
 HANDLERS = {}
 STALE_AFTER = timedelta(minutes=10)
@@ -82,3 +82,29 @@ def deliver_webhook(job):
     delivery.status, delivery.response_code, delivery.error = 'delivered', code, ''
     delivery.save(update_fields=['status', 'response_code', 'error'])
     return {'delivery': str(delivery.pk), 'code': code}
+
+
+@handler('agent.propose')
+def propose_annotations(job):
+    """Run a project's predictor on one task and store the proposal as an
+    annotation for a human to verify. Proposals go through the same schema
+    validation and revision guard as human saves, and never auto-submit."""
+    from .agents import PREDICTORS
+    from .views import validate_annotation
+    task = Task.objects.select_related('project').get(pk=job.payload['task_id'])
+    if task.state not in ['open', 'in_progress', 'changes_requested']:
+        return {'skipped': f'task state is {task.state}'}
+    predictor = PREDICTORS.get(task.project.agent_predictor)
+    if not predictor:
+        raise RuntimeError(f'Unknown predictor: {task.project.agent_predictor!r}')
+    proposal = predictor(task, task.project.agent_config or {})
+    confidence = proposal.pop('confidence', [])
+    annotation = validate_annotation(proposal, task.project)
+    changed = Task.objects.filter(pk=task.pk, revision=task.revision, state=task.state).update(
+        annotation=annotation, revision=task.revision + 1, state='in_progress')
+    if not changed:
+        return {'skipped': 'revision changed under us — requeue if still needed'}
+    Event.objects.create(project=task.project, task=task, actor=None, action='agent.proposed',
+                         payload={'predictor': task.project.agent_predictor,
+                                  'regions': len(annotation['regions']), 'confidence': confidence})
+    return {'task': task.pk, 'regions': len(annotation['regions'])}

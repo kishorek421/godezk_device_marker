@@ -28,6 +28,8 @@ class Project(models.Model):
     instructions = models.TextField(blank=True)
     schema_version = models.PositiveIntegerField(default=1)
     geometry = models.CharField(max_length=8, choices=GEOMETRIES, default='any')
+    agent_predictor = models.CharField(max_length=40, blank=True)
+    agent_config = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
 
 

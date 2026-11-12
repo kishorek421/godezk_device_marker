@@ -440,6 +440,56 @@ class WorkflowTests(TestCase):
         self.assertEqual(job.status, 'dead')
         self.assertEqual(job.attempts, 2)
 
+    def test_autolabel_queues_and_runs_predictor(self):
+        from .agents import PREDICTORS
+        PREDICTORS['test-stub'] = lambda task, config: {'regions': [
+            {'id': 'ai-0', 'label': str(self.label.pk), 'type': 'box',
+             'points': [[.1, .1], [.5, .5]], 'attributes': {}}], 'relations': []}
+        task = self.upload()
+        result = self.post(f'/projects/{self.project.pk}/autolabel/', {'predictor': 'test-stub', 'config': {}})
+        self.assertEqual(result.status_code, 200, result.content)
+        self.assertEqual(Job.objects.filter(type='agent.propose').count(), 1)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.agent_predictor, 'test-stub')
+        self.assertEqual(run_pending(), 1)
+        task.refresh_from_db()
+        self.assertEqual(task.state, 'in_progress')
+        self.assertEqual(len(task.annotation['regions']), 1)
+        proposal = Event.objects.get(action='agent.proposed')
+        self.assertEqual(proposal.payload['predictor'], 'test-stub')
+        self.assertEqual(proposal.payload['regions'], 1)
+        del PREDICTORS['test-stub']
+
+    def test_agent_propose_skips_locked_tasks(self):
+        from .agents import PREDICTORS
+        PREDICTORS['test-stub'] = lambda task, config: {'regions': [], 'relations': []}
+        self.project.agent_predictor = 'test-stub'
+        self.project.save(update_fields=['agent_predictor'])
+        task = self.upload()
+        task.state = 'submitted'
+        task.save(update_fields=['state'])
+        job = Job.objects.create(type='agent.propose', payload={'task_id': task.pk})
+        self.assertEqual(run_pending(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'done')
+        self.assertIn('skipped', job.result)
+        task.refresh_from_db()
+        self.assertEqual(task.state, 'submitted')
+        del PREDICTORS['test-stub']
+
+    def test_unknown_predictor_dead_letters(self):
+        job = Job.objects.create(type='agent.propose', payload={'task_id': self.upload().pk})
+        self.assertEqual(run_pending(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'pending')  # retries on transient error
+        job.attempts = job.max_attempts - 1
+        job.run_after = timezone.now()
+        job.save(update_fields=['attempts', 'run_after'])
+        self.assertEqual(run_pending(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'dead')
+        self.assertIn('Unknown predictor', job.error)
+
     def test_backup_archive_is_restorable(self):
         task = self.upload()
         out = os.path.join(self.directory.name, 'backups')

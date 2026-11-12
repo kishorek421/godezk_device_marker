@@ -199,7 +199,9 @@ def project_page(request, pk):
     progress = {'rows': rows, 'given': given, 'total': p.tasks.count(), 'approved': p.tasks.filter(state='approved').count(),
                 'submitted_7d': p.events.filter(action='task.submitted', created_at__gte=timezone.now() - timedelta(days=7)).count()}
     hooks = [(w, w.deliveries.order_by('-created_at').first()) for w in p.webhooks.all()]
+    from .agents import PREDICTORS
     return render(request, 'studio/project.html', {'project': p, 'membership': m, 'tasks': page, 'labels': p.labels.all(), 'members': members, 'events': p.events.select_related('actor').order_by('-id')[:30], 'releases': p.releases.order_by('-created_at'), 'states': Task.STATES, 'progress': progress,
+                                                   'predictors': sorted(PREDICTORS),
                                                    'api_tokens': p.workspace.api_tokens.filter(revoked=False).select_related('user'),
                                                    'webhooks': hooks})
 
@@ -550,6 +552,33 @@ def distribute(request, pk):
     Task.objects.bulk_update(tasks, ['assignee', 'revision', 'updated_at'])
     event(request, p, 'tasks.distributed', payload={'users': [m.user.username for m in members], 'count': len(tasks), 'scope': scope})
     return JsonResponse({'reload': True})
+
+
+@api
+@transaction.atomic
+def autolabel(request, pk):
+    from .agents import PREDICTORS
+    from .jobs import enqueue
+    p, _ = project_access(request, pk, ['owner', 'reviewer'])
+    predictor_name = request.data.get('predictor', p.agent_predictor)
+    if predictor_name not in PREDICTORS:
+        raise Invalid(f'Unknown predictor — available: {", ".join(sorted(PREDICTORS))}')
+    config = request.data.get('config')
+    if config is not None:
+        if not isinstance(config, dict):
+            raise Invalid('Config must be an object')
+        p.agent_config = config
+    p.agent_predictor = predictor_name
+    p.save(update_fields=['agent_predictor', 'agent_config'])
+    tasks = list(p.tasks.filter(state__in=['open', 'in_progress', 'changes_requested']).order_by('id'))
+    if not tasks:
+        raise Invalid('No tasks available for auto-labeling')
+    if len(tasks) > 1000:
+        raise Invalid('Maximum 1000 tasks per auto-label run')
+    for t in tasks:
+        enqueue('agent.propose', {'task_id': t.pk})
+    event(request, p, 'agent.queued', payload={'predictor': predictor_name, 'tasks': len(tasks)})
+    return JsonResponse({'queued': len(tasks), 'reload': True})
 
 
 @api
