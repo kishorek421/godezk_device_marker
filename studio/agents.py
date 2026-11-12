@@ -55,14 +55,20 @@ def predict_http(task, config):
         data = json.loads(response.read())
     label_map = config.get('label_map') or {}
     min_score = float(config.get('min_score', 0))
+    # detections name project label keys — resolve them to the label pks
+    # validate_annotation requires
+    by_key = {l.key: str(l.pk) for l in task.project.labels.filter(archived=False)}
     regions = []
     scores = []
     for det in data.get('detections', []):
         if det.get('score', 1) < min_score:
             continue
         key = label_map.get(det.get('label'), det.get('label'))
+        label_pk = by_key.get(key)
+        if not label_pk:
+            continue  # detection for a class the project doesn't track
         scores.append(round(det.get('score', 0), 3))
-        regions.append({'id': _region_id(len(regions)), 'label': key,
+        regions.append({'id': _region_id(len(regions)), 'label': label_pk,
                         'type': det.get('type', 'box'), 'points': det.get('points', []),
                         'attributes': {}})
     return {'regions': regions, 'relations': [], 'confidence': scores}
