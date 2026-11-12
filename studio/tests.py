@@ -550,6 +550,35 @@ class WorkflowTests(TestCase):
         count = scratch.execute('SELECT COUNT(*) FROM studio_task').fetchone()[0]
         self.assertEqual(count, self.project.tasks.count())
 
+    def test_bulk_submit(self):
+        tasks = [self.upload()]
+        for i in range(2):
+            tasks.append(Task.objects.create(project=self.project, filename=f's{i}.png', digest=f'sub{i}', width=60, height=40, image='x.jpg'))
+        tasks[0].assignee = self.worker
+        tasks[0].save(update_fields=['assignee'])
+        tasks[1].state = 'submitted'
+        tasks[1].save(update_fields=['state'])
+        # annotator submits only their own tasks
+        self.client.force_login(self.worker)
+        result = self.post(f'/projects/{self.project.pk}/bulk-submit/', {'task_ids': [t.pk for t in tasks]})
+        self.assertEqual(result.status_code, 200, result.content)
+        data = result.json()
+        self.assertEqual((data['submitted'], data['skipped']), (1, 2))
+        tasks[0].refresh_from_db()
+        self.assertEqual(tasks[0].state, 'submitted')
+        # owner can submit any editable task
+        self.client.force_login(self.owner)
+        tasks[2].assignee = self.worker
+        tasks[2].save(update_fields=['assignee'])
+        result = self.post(f'/projects/{self.project.pk}/bulk-submit/', {'task_ids': [tasks[2].pk]})
+        self.assertEqual(result.status_code, 200)
+        tasks[2].refresh_from_db()
+        self.assertEqual(tasks[2].state, 'submitted')
+        # reviewer cannot submit
+        self.client.force_login(self.reviewer)
+        other = Task.objects.create(project=self.project, filename='r.png', digest='r1', width=1, height=1, image='x.jpg')
+        self.assertEqual(self.post(f'/projects/{self.project.pk}/bulk-submit/', {'task_ids': [other.pk]}).status_code, 400)
+
     def test_health_endpoint(self):
         anon = Client()
         r = anon.get('/health/')

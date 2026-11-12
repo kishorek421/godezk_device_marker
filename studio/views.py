@@ -644,6 +644,28 @@ def assign(request, pk):
 
 @api
 @transaction.atomic
+def bulk_submit(request, pk):
+    p, m = project_access(request, pk)
+    ids = request.data.get('task_ids')
+    if not isinstance(ids, list) or not 0 < len(ids) <= 500 or any(type(i) is not int for i in ids):
+        raise Invalid('Choose between 1 and 500 tasks')
+    submitted = skipped = 0
+    for t in p.tasks.filter(pk__in=ids):
+        if t.state not in ['open', 'in_progress', 'changes_requested'] or (t.assignee_id != request.user.pk and m.role != 'owner'):
+            skipped += 1
+            continue
+        if Task.objects.filter(pk=t.pk, revision=t.revision, state=t.state).update(state='submitted', revision=t.revision + 1):
+            event(request, p, 'task.submitted', t, {'revision': t.revision + 1, 'bulk': True})
+            submitted += 1
+        else:
+            skipped += 1
+    if not submitted:
+        raise Invalid('None of the selected tasks could be submitted')
+    return JsonResponse({'submitted': submitted, 'skipped': skipped, 'reload': True})
+
+
+@api
+@transaction.atomic
 def review(request, pk):
     t, m = task_access(request, pk)
     if m.role not in ['owner', 'reviewer'] or t.assignee_id == request.user.pk:
