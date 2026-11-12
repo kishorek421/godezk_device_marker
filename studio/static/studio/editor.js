@@ -220,8 +220,9 @@
   function setZoom(value) { zoom = Math.max(1, Math.min(4, value)); $('stage').style.width = `${zoom * 100}%`; $('zoom-level').textContent = `${Math.round(zoom * 100)}%`; }
   $('zoom-in').onclick = () => setZoom(zoom + .25); $('zoom-out').onclick = () => setZoom(zoom - .25);
   async function save(submit = false) {
-    if (saving || blocked || !config.editable || (!dirty && !submit)) return false;
+    if (saving || blocked || !config.editable) return false;
     if (draft.length) { notify('Finish the polygon with Enter, or cancel with Escape.', true); return false; }
+    if (!dirty && !submit) return true;
     saving = true; const sentGeneration = generation; status('Saving…');
     if ($('submit')) $('submit').disabled = true;
     try {

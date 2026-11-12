@@ -171,6 +171,39 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         expect(p.locator('#save-status')).to_contain_text('Save failed')
         self.assertEqual(self.errors, [])
 
+    def test_save_and_next_navigates_without_unsaved_changes(self):
+        project = Project.objects.create(workspace=self.workspace, name='Nav lab')
+        Label.objects.create(project=project, key='device', name='Device', attributes=[])
+        buffer = io.BytesIO()
+        Image.new('RGB', (640, 480), '#8899aa').save(buffer, 'JPEG')
+        tasks = []
+        for i in range(3):
+            task = Task(project=project, filename=f'p{i}.jpg', digest=f'nav-{i}', width=640, height=480, assignee=self.worker)
+            task.image.save(f'p{i}.jpg', ContentFile(buffer.getvalue()))
+            tasks.append(task)
+        p = self.page
+        self.login('artist', 'Browser-artist-482!')
+        p.goto(self.live_server_url + f'/tasks/{tasks[0].pk}/')
+        p.locator('#source-image').wait_for()
+        # clean doc — nothing to save, but Save & Next must still advance
+        with p.expect_navigation():
+            p.get_by_role('button', name='Save & Next').click()
+        self.assertIn(f'/tasks/{tasks[1].pk}/', p.url)
+        # dirty doc — saves first, then advances to task 3
+        p.locator('#source-image').wait_for()
+        bounds = p.locator('#overlay').bounding_box()
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(bounds['x'] + bounds['width'] * .2, bounds['y'] + bounds['height'] * .2)
+        p.mouse.down()
+        p.mouse.move(bounds['x'] + bounds['width'] * .5, bounds['y'] + bounds['height'] * .5, steps=5)
+        p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('1')
+        with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 200):
+            with p.expect_navigation():
+                p.get_by_role('button', name='Save & Next').click()
+        self.assertIn(f'/tasks/{tasks[2].pk}/', p.url)
+        self.assertEqual(self.errors, [])
+
     def test_chunked_upload_in_browser(self):
         project = Project.objects.create(workspace=self.workspace, name='Bulk lab')
         buffers = []
