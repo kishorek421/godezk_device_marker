@@ -1,0 +1,83 @@
+# GitHub Actions workflow for building and pushing Device Marker
+# Docker images — mirrors the male_female_inspection workflow.
+# Triggers on push to main, dev, and staging branches, and manual dispatch.
+name: Build and Push Device Marker
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - staging
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set environment
+        id: env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            kishore2712/godezk_device_marker:latest
+            kishore2712/godezk_device_marker:${{ github.sha }}
+            kishore2712/godezk_device_marker:${{ steps.env.outputs.environment }}-${{ steps.sha.outputs.short }}
+          cache-from: type=registry,ref=kishore2712/godezk_device_marker:buildcache
+          cache-to: type=registry,ref=kishore2712/godezk_device_marker:buildcache,mode=max
+
+      # Update the DevOps repository with the new image tag (GitOps → k8s)
+      - name: Update DevOps repo with new image tag
+        if: steps.env.outputs.environment != 'pr'
+        env:
+          DEVOPS_PAT: ${{ secrets.DEVOPS_PAT }}
+        run: |
+          git config --global user.email "ci@godezk-device.com"
+          git config --global user.name "GoDezk Device CI"
+
+          git clone https://kishorek421:${DEVOPS_PAT}@github.com/kishorek421/godezk_device_devops.git devops
+          cd devops
+
+          BRANCH_NAME="${{ steps.env.outputs.environment }}"
+          if [ "$BRANCH_NAME" = "production" ]; then BRANCH_NAME="main"; fi
+          git checkout $BRANCH_NAME || git checkout -b $BRANCH_NAME
+
+          cd k8s/services/device_marker/overlays/${{ steps.env.outputs.environment }}
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          sed -i "s|newTag:.*|newTag: ${{ steps.env.outputs.environment }}-${SHORT_SHA}|g" kustomization.yaml
+
+          git add kustomization.yaml
+          git diff --staged --quiet || git commit -m "ci: update device-marker ${{ steps.env.outputs.environment }} image to ${SHORT_SHA}"
+          git pull --rebase origin $BRANCH_NAME
+          git push origin $BRANCH_NAME
+
+      - name: Summary for image pushed into docker hub
+        run: |
+          echo " Image pushed : kishore2712/godezk_device_marker:${{ github.sha }}"
