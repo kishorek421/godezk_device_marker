@@ -504,6 +504,17 @@ class WorkflowTests(TestCase):
         self.assertEqual(job.payload['task_id'], other.pk)
         self.assertFalse(job.payload['overwrite'])
 
+    def test_autolabel_dedupes_pending_jobs(self):
+        self.upload()
+        self.project.agent_predictor = 'http'
+        self.project.save(update_fields=['agent_predictor'])
+        self.post(f'/projects/{self.project.pk}/autolabel/', {})
+        self.assertEqual(Job.objects.filter(type='agent.propose').count(), 1)
+        # second click — task already queued, nothing new enqueued
+        result = self.post(f'/projects/{self.project.pk}/autolabel/', {})
+        self.assertEqual(result.status_code, 400)
+        self.assertEqual(Job.objects.filter(type='agent.propose').count(), 1)
+
     def test_proposal_decision_accept_and_undo(self):
         task = self.upload()
         task.assignee = self.worker

@@ -583,6 +583,10 @@ def autolabel(request, pk):
         raise Invalid('Invalid auto-label scope')
     if not tasks:
         raise Invalid('No tasks available for auto-labeling')
+    already = {j.payload.get('task_id') for j in Job.objects.filter(type='agent.propose', status__in=['pending', 'running'])}
+    tasks = [t for t in tasks if t.pk not in already]
+    if not tasks:
+        raise Invalid('All eligible tasks already have an auto-label job queued')
     if len(tasks) > 1000:
         raise Invalid('Maximum 1000 tasks per auto-label run')
     for t in tasks:
