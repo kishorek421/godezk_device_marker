@@ -1,0 +1,3 @@
+# Optional: only needed on the machine running model_server.py (AI auto-labeling).
+# ~2 GB of ML dependencies — keep off the web/worker nodes.
+ultralytics==8.4.211

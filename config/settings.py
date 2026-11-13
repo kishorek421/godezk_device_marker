@@ -53,6 +53,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -149,6 +150,13 @@ SECURE_SSL_REDIRECT = not DEBUG
 SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
 SECURE_HSTS_PRELOAD = not DEBUG
+# Behind a TLS-terminating proxy (nginx, ELB, Cloudflare): the proxy strips
+# HTTPS, so Django must learn it from the forwarded header or SECURE_SSL_REDIRECT
+# and secure cookies misbehave. Set DJANGO_TRUST_PROXY=1 when a proxy sets
+# X-Forwarded-Proto — and ONLY then, otherwise clients can spoof it.
+if os.environ.get('DJANGO_TRUST_PROXY') == '1':
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get('DJANGO_CSRF_ORIGINS', '').split(',') if o.strip()]
 if os.environ.get('POSTGRES_DB'):
     DATABASES['default'] = {
         'ENGINE': 'django.db.backends.postgresql',
