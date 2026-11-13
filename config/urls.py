@@ -21,6 +21,7 @@ from studio import views
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/', include('django.contrib.auth.urls')),
+    path('health', views.health),
     path('', views.home),
     path('workspaces/create/', views.workspace_create),
     path('projects/create/', views.project_create),

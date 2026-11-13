@@ -74,6 +74,10 @@ def event(request, project, action, task=None, payload=None):
     Event.objects.create(project=project, task=task, actor=request.user, action=action, payload=payload or {})
 
 
+def health(request):
+    return JsonResponse({'status': 'ok'})
+
+
 @login_required
 def home(request):
     memberships = Membership.objects.filter(user=request.user).select_related('workspace')

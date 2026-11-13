@@ -1,0 +1,11 @@
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+.local-secret
+db.sqlite3
+private_uploads/
+staticfiles/
+models/
+.DS_Store
