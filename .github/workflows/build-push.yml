@@ -62,7 +62,10 @@ jobs:
           git config --global user.email "ci@godezk-device.com"
           git config --global user.name "GoDezk Device CI"
 
-          git clone https://kishorek421:${DEVOPS_PAT}@github.com/kishorek421/godezk_device_devops.git devops
+          # Strip stray whitespace/newlines from the token so the URL stays
+          # a single argument, and keep it quoted to avoid word-splitting.
+          PAT="$(printf '%s' "$DEVOPS_PAT" | tr -d '[:space:]')"
+          git clone "https://kishorek421:${PAT}@github.com/kishorek421/godezk_device_devops.git" devops
           cd devops
 
           BRANCH_NAME="${{ steps.env.outputs.environment }}"
