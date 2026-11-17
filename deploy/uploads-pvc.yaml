@@ -1,0 +1,12 @@
+# Persistent storage for uploaded annotation images.
+# Mount at /app/private_uploads on the device-marker deployment —
+# without this, uploaded images are wiped on every pod restart.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: device-marker-uploads
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi
