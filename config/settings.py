@@ -52,6 +52,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'studio.middleware.health_check',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -144,9 +145,16 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
-SECURE_SSL_REDIRECT = not DEBUG
+# Secure-cookie and HTTPS-redirect defaults turn on with DEBUG=0. On
+# plain-HTTP ingress (e.g. a bare NodePort without TLS termination) they
+# break logins and loop redirects — set DJANGO_SECURE_COOKIES=0 and/or
+# DJANGO_SSL_REDIRECT=0 there, and prefer real TLS instead.
+_secure_cookies = os.environ.get('DJANGO_SECURE_COOKIES')
+_secure = (not DEBUG) if _secure_cookies is None else _secure_cookies == '1'
+SESSION_COOKIE_SECURE = _secure
+CSRF_COOKIE_SECURE = _secure
+_ssl_redirect = os.environ.get('DJANGO_SSL_REDIRECT')
+SECURE_SSL_REDIRECT = (not DEBUG) if _ssl_redirect is None else _ssl_redirect == '1'
 SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
 SECURE_HSTS_PRELOAD = not DEBUG
