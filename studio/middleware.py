@@ -1,14 +1,22 @@
-from django.http import HttpResponse
-
-
-class HealthCheckMiddleware:
-    """Short-circuit /health before host validation and SSL redirect so
-    kubelet probes, which hit the pod IP directly, always get a 200."""
-
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
+def health_check(get_response):
+    # K8s/kubelet probes hit the pod IP directly, so they fail ALLOWED_HOSTS
+    # validation and SECURE_SSL_REDIRECT further down the chain. Answer the
+    # bare /health probe path before any of that runs; /health/ keeps its
+    # real view (admin detail, host validation).
+    def middleware(request):
         if request.path == '/health':
-            return HttpResponse('ok')
-        return self.get_response(request)
+            from django.http import JsonResponse
+            return JsonResponse({'status': 'ok'})
+        return get_response(request)
+    return middleware
+
+
+def no_store_html(get_response):
+    # Authenticated pages must never be served from back-forward or HTTP
+    # caches — they hold per-user, per-revision state that goes stale.
+    def middleware(request):
+        response = get_response(request)
+        if response.get('Content-Type', '').startswith('text/html'):
+            response['Cache-Control'] = 'no-store'
+        return response
+    return middleware

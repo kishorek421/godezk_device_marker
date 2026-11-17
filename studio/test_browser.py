@@ -1,12 +1,17 @@
+import os
+os.environ.setdefault('DJANGO_ALLOW_ASYNC_UNSAFE', 'true')
+
+import hashlib
 import io
 import json
 import tempfile
 from PIL import Image
 from django.contrib.auth import get_user_model
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
+from django.core.files.base import ContentFile
 from django.test import override_settings
 from playwright.sync_api import sync_playwright, expect
-from .models import Workspace, Membership, Task, Release
+from .models import Workspace, Membership, Project, Label, Task, Release
 
 
 class BrowserWorkflowTests(StaticLiveServerTestCase):
@@ -20,9 +25,9 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         self.owner = User.objects.create_user('manager', password='Browser-manager-482!')
         self.worker = User.objects.create_user('artist', password='Browser-artist-482!')
         self.reviewer = User.objects.create_user('quality', password='Browser-quality-482!')
-        workspace = Workspace.objects.create(name='Browser Lab')
+        self.workspace = Workspace.objects.create(name='Browser Lab')
         for user, role in [(self.owner, 'owner'), (self.worker, 'annotator'), (self.reviewer, 'reviewer')]:
-            Membership.objects.create(workspace=workspace, user=user, role=role)
+            Membership.objects.create(workspace=self.workspace, user=user, role=role)
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch()
         self.page = self.browser.new_page(viewport={'width': 1440, 'height': 1100})
@@ -56,7 +61,7 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         expect(p.get_by_text('switch · state', exact=True)).to_be_visible()
         output = io.BytesIO()
         Image.new('RGB', (900, 600), '#d8e0ec').save(output, 'PNG')
-        p.locator('input[type=file]').set_input_files({'name': 'switch-panel.png', 'mimeType': 'image/png', 'buffer': output.getvalue()})
+        p.locator('input[name=images]').set_input_files({'name': 'switch-panel.png', 'mimeType': 'image/png', 'buffer': output.getvalue()})
         with p.expect_navigation():
             p.get_by_role('button', name='Upload to dataset').click()
         p.locator('.assign select').select_option(str(self.worker.pk))
@@ -74,15 +79,19 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         p.get_by_role('button', name='Box (B)', exact=True).click()
         p.mouse.move(*point(.12, .15)); p.mouse.down(); p.mouse.move(*point(.42, .55), steps=8); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('1')
+        # the drawn box is immediately draggable — the tool auto-switches to Select
+        p.mouse.move(*point(.27, .35)); p.mouse.down(); p.mouse.move(*point(.37, .45), steps=5); p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('1')
+        self.assertTrue(215 < float(p.locator('#overlay rect').first.get_attribute('x')) < 225)
         p.locator('#attributes input').fill('on')
         p.locator('#attributes input').press('Tab')
-        p.get_by_role('button', name='Polygon (P)', exact=True).click()
-        for coordinates in [(.6, .2), (.85, .2), (.75, .5)]:
-            p.mouse.click(*point(*coordinates))
-        p.keyboard.press('Enter')
+        expect(p.get_by_role('button', name='Polygon (P)', exact=True)).to_be_hidden()
+        expect(p.get_by_role('button', name='Point (K)', exact=True)).to_be_hidden()
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(*point(.6, .2)); p.mouse.down(); p.mouse.move(*point(.85, .5), steps=8); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('2')
-        p.get_by_role('button', name='Point (K)', exact=True).click()
-        p.mouse.click(*point(.8, .8))
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(*point(.7, .65)); p.mouse.down(); p.mouse.move(*point(.9, .9), steps=8); p.mouse.up()
         expect(p.locator('#region-count')).to_have_text('3')
         p.get_by_role('button', name='Undo', exact=True).click()
         expect(p.locator('#region-count')).to_have_text('2')
@@ -102,16 +111,17 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         saved = json.loads(p.locator('#editor-data').text_content())
         self.assertEqual(saved['annotation']['regions'][0]['attributes']['state'], 'on')
         with p.expect_navigation():
-            p.get_by_role('button', name='Submit for review').click()
-        expect(p.locator('.status')).to_have_text('Submitted')
-        expect(p.get_by_role('button', name='Save', exact=True)).to_have_count(0)
+            p.get_by_role('button', name='Submit & Next').click()
+        # single task → submit+next lands back on the project page
+        expect(p.locator('td .status').first).to_have_text('Submitted')
         p.get_by_role('button', name='Sign out').click()
         self.login('quality', 'Browser-quality-482!')
         p.goto(self.live_server_url + f'/tasks/{task_id}/')
         p.get_by_label('Feedback').fill('Geometry and relation verified.')
         with p.expect_navigation():
             p.get_by_role('button', name='Record review').click()
-        expect(p.locator('.status')).to_have_text('Approved')
+        # review auto-advances; queue exhausted → back on the project page
+        expect(p.locator('td .status').first).to_have_text('Approved')
         p.goto(project_url)
         p.get_by_label('Release name').fill('verified-v1')
         with p.expect_navigation():
@@ -125,4 +135,118 @@ class BrowserWorkflowTests(StaticLiveServerTestCase):
         self.assertEqual(snapshot['tasks'][0]['annotation']['relations'][0]['key'], 'controls')
         p.set_viewport_size({'width': 390, 'height': 844})
         expect(p.get_by_role('heading', name='Device labeling', exact=True)).to_be_visible()
+        self.assertEqual(self.errors, [])
+
+    def test_recovery_autosave_and_conflict_in_browser(self):
+        project = Project.objects.create(workspace=self.workspace, name='Recovery lab')
+        Label.objects.create(project=project, key='device', name='Device', attributes=[{'key': 'state', 'options': ['on', 'off']}])
+        buffer = io.BytesIO()
+        Image.new('RGB', (640, 480), '#8899aa').save(buffer, 'JPEG')
+        task = Task(project=project, filename='panel.jpg', digest=hashlib.sha256(buffer.getvalue()).hexdigest(), width=640, height=480, assignee=self.worker)
+        task.image.save('panel.jpg', ContentFile(buffer.getvalue()))
+        p = self.page
+        self.login('artist', 'Browser-artist-482!')
+        p.goto(self.live_server_url + f'/tasks/{task.pk}/')
+        p.locator('#source-image').wait_for()
+        p.wait_for_function('document.getElementById("source-image").naturalWidth > 0')
+        bounds = p.locator('#overlay').bounding_box()
+        def point(x, y):
+            return bounds['x'] + bounds['width'] * x, bounds['y'] + bounds['height'] * y
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(*point(.1, .1)); p.mouse.down(); p.mouse.move(*point(.3, .4), steps=5); p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('1')
+        with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 200, timeout=12000):
+            pass
+        expect(p.locator('#save-status')).to_contain_text('revision')
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(*point(.5, .5)); p.mouse.down(); p.mouse.move(*point(.7, .7), steps=5); p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('2')
+        p.reload()
+        p.locator('#source-image').wait_for()
+        expect(p.locator('#region-count')).to_have_text('2')
+        expect(p.locator('#save-status')).to_contain_text('Recovered')
+        Task.objects.filter(pk=task.pk).update(revision=99)
+        with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 409):
+            p.get_by_role('button', name='Save', exact=True).click()
+        expect(p.locator('#save-status')).to_contain_text('Save failed')
+        self.assertEqual(self.errors, [])
+
+    def test_submit_and_next_is_one_click(self):
+        project = Project.objects.create(workspace=self.workspace, name='Nav lab')
+        Label.objects.create(project=project, key='device', name='Device', attributes=[])
+        buffer = io.BytesIO()
+        Image.new('RGB', (640, 480), '#8899aa').save(buffer, 'JPEG')
+        tasks = []
+        for i in range(3):
+            task = Task(project=project, filename=f'p{i}.jpg', digest=f'nav-{i}', width=640, height=480, assignee=self.worker)
+            task.image.save(f'p{i}.jpg', ContentFile(buffer.getvalue()))
+            tasks.append(task)
+        p = self.page
+        self.login('artist', 'Browser-artist-482!')
+        p.goto(self.live_server_url + f'/tasks/{tasks[0].pk}/')
+        p.locator('#source-image').wait_for()
+        # one click: confirm → submit → advance (dialog auto-accepted)
+        with p.expect_navigation():
+            p.get_by_role('button', name='Submit & Next').click()
+        self.assertIn(f'/tasks/{tasks[1].pk}/', p.url)
+        tasks[0].refresh_from_db()
+        self.assertEqual(tasks[0].state, 'submitted')
+        # dirty doc — saves, submits, advances to task 3
+        p.locator('#source-image').wait_for()
+        bounds = p.locator('#overlay').bounding_box()
+        p.get_by_role('button', name='Box (B)', exact=True).click()
+        p.mouse.move(bounds['x'] + bounds['width'] * .2, bounds['y'] + bounds['height'] * .2)
+        p.mouse.down()
+        p.mouse.move(bounds['x'] + bounds['width'] * .5, bounds['y'] + bounds['height'] * .5, steps=5)
+        p.mouse.up()
+        expect(p.locator('#region-count')).to_have_text('1')
+        with p.expect_response(lambda response: response.url.endswith('/save/') and response.status == 200):
+            with p.expect_navigation():
+                p.get_by_role('button', name='Submit & Next').click()
+        self.assertIn(f'/tasks/{tasks[2].pk}/', p.url)
+        tasks[1].refresh_from_db()
+        self.assertEqual(tasks[1].state, 'submitted')
+        self.assertEqual(self.errors, [])
+
+    def test_chunked_upload_in_browser(self):
+        project = Project.objects.create(workspace=self.workspace, name='Bulk lab')
+        buffers = []
+        for i in range(35):
+            buffer = io.BytesIO()
+            Image.new('RGB', (64, 64), (i * 7 % 256, 90, 160)).save(buffer, 'PNG')
+            buffers.append({'name': f'panel-{i}.png', 'mimeType': 'image/png', 'buffer': buffer.getvalue()})
+        p = self.page
+        self.login('manager', 'Browser-manager-482!')
+        p.goto(self.live_server_url + f'/projects/{project.pk}/')
+        p.locator('input[name=images]').set_input_files(buffers)
+        p.get_by_role('button', name='Upload to dataset').click()
+        expect(p.locator('.sectionhead .muted').first).to_contain_text('35 items', timeout=30000)
+        self.assertEqual(Task.objects.filter(project=project).count(), 35)
+        self.assertEqual(self.errors, [])
+
+    def test_folder_upload_in_browser(self):
+        project = Project.objects.create(workspace=self.workspace, name='Folder lab')
+        folder = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__('shutil').rmtree(folder, ignore_errors=True))
+        for i in range(4):
+            Image.new('RGB', (32, 32), (i * 60 % 256, 100, 50)).save(os.path.join(folder, f'f{i}.png'))
+        open(os.path.join(folder, 'notes.txt'), 'w').write('not an image')
+        p = self.page
+        self.login('manager', 'Browser-manager-482!')
+        p.goto(self.live_server_url + f'/projects/{project.pk}/')
+        p.locator('#dir-picker').set_input_files(folder)
+        expect(p.locator('input[name=images]')).to_have_js_property('files.length', 4)
+        p.get_by_role('button', name='Upload to dataset').click()
+        expect(p.locator('.sectionhead .muted').first).to_contain_text('4 items', timeout=30000)
+        self.assertEqual(Task.objects.filter(project=project).count(), 4)
+        self.assertEqual(self.errors, [])
+
+    def test_back_navigation_shows_fresh_state_in_browser(self):
+        p = self.page
+        self.login('manager', 'Browser-manager-482!')
+        p.get_by_label('Project name', exact=True).fill('Back nav lab')
+        p.get_by_role('button', name='Create project').click()
+        p.wait_for_url('**/projects/*/')
+        p.go_back()
+        expect(p.get_by_text('Back nav lab', exact=True)).to_be_visible()
         self.assertEqual(self.errors, [])

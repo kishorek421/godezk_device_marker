@@ -52,14 +52,16 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'studio.middleware.HealthCheckMiddleware',
+    'studio.middleware.health_check',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'studio.middleware.no_store_html',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -89,6 +91,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'OPTIONS': {'timeout': 30},
+        'TEST': {'NAME': BASE_DIR / 'test_db.sqlite3'},
     }
 }
 
@@ -133,6 +137,7 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+TEST_RUNNER = 'config.testrunner.WinTolerantRunner'
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/accounts/login/'
 MEDIA_ROOT = BASE_DIR / 'private_uploads'
@@ -140,12 +145,26 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
-SECURE_SSL_REDIRECT = not DEBUG
+# Secure-cookie and HTTPS-redirect defaults turn on with DEBUG=0. On
+# plain-HTTP ingress (e.g. a bare NodePort without TLS termination) they
+# break logins and loop redirects — set DJANGO_SECURE_COOKIES=0 and/or
+# DJANGO_SSL_REDIRECT=0 there, and prefer real TLS instead.
+_secure_cookies = os.environ.get('DJANGO_SECURE_COOKIES')
+_secure = (not DEBUG) if _secure_cookies is None else _secure_cookies == '1'
+SESSION_COOKIE_SECURE = _secure
+CSRF_COOKIE_SECURE = _secure
+_ssl_redirect = os.environ.get('DJANGO_SSL_REDIRECT')
+SECURE_SSL_REDIRECT = (not DEBUG) if _ssl_redirect is None else _ssl_redirect == '1'
 SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
 SECURE_HSTS_PRELOAD = not DEBUG
+# Behind a TLS-terminating proxy (nginx, ELB, Cloudflare): the proxy strips
+# HTTPS, so Django must learn it from the forwarded header or SECURE_SSL_REDIRECT
+# and secure cookies misbehave. Set DJANGO_TRUST_PROXY=1 when a proxy sets
+# X-Forwarded-Proto — and ONLY then, otherwise clients can spoof it.
+if os.environ.get('DJANGO_TRUST_PROXY') == '1':
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get('DJANGO_CSRF_ORIGINS', '').split(',') if o.strip()]
 if os.environ.get('POSTGRES_DB'):
     DATABASES['default'] = {
         'ENGINE': 'django.db.backends.postgresql',
@@ -154,5 +173,23 @@ if os.environ.get('POSTGRES_DB'):
         'PASSWORD': os.environ['POSTGRES_PASSWORD'],
         'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
+        'OPTIONS': {
+            'sslmode': os.environ.get('POSTGRES_SSLMODE', 'prefer'),
+        },
+    }
+
+# Object storage (S3-compatible). Set AWS_STORAGE_BUCKET_NAME + credentials
+# to store private uploads in object storage instead of the local filesystem.
+if os.environ.get('AWS_STORAGE_BUCKET_NAME'):
+    INSTALLED_APPS.append('storages')
+    AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL') or None
+    AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME') or None
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = False
+    STORAGES = {
+        'default': {'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
     }
 
