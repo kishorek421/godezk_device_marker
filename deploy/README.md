@@ -1,32 +1,46 @@
-# deploy/ — manifests for the DevOps repo
+# deploy/ — manifests for `godezk_device_devops`
 
-Hand these files to whoever owns `godezk_device_devops`. They map to
-`k8s/services/device_marker/` — adjust names/namespaces/storage class
-to match the cluster conventions.
+Tailored to this cluster's existing conventions (per-app Postgres like
+mlops/attendance/vehicle/task-manager, shared MinIO, Kustomize overlays,
+one ArgoCD Application per service on branch `dev`).
+
+## Where they go
+
+```
+godezk_device_devops/
+└── k8s/services/device_marker/
+    ├── base/            # existing deployment/service + postgres.yaml
+    └── overlays/dev/    # env-specific patches, kustomization.yaml
+```
+
+Add an ArgoCD Application for the postgres resources if the existing
+`device-marker-dev` app doesn't already cover the whole folder.
 
 ## Apply order
 
-1. `secrets.example.yaml` — fill real values, `kubectl apply`, keep the
-   filled copy OUT of git (store values in the secrets manager)
-2. `postgres.yaml` — Postgres StatefulSet + Service + 20Gi PVC
-3. `uploads-pvc.yaml` — 50Gi PVC for `/app/private_uploads`
-4. `deployment-env.yaml` — commented env/volume block to merge into the
-   existing device-marker Deployment
-5. Rollout → `kubectl exec` → `python manage.py seed_demo` for first users
+1. `secrets.example.yaml` → fill `POSTGRES_PASSWORD`, `url` (same pw),
+   `django-secret-key` → `kubectl apply` → store values in secrets
+   manager, not git
+2. `postgres.yaml` → `device-marker-postgres` Deployment + ClusterIP
+   Service + 5Gi `local-path` PVC. Postgres **self-initializes** from
+   `POSTGRES_DB`/`POSTGRES_USER`/`POSTGRES_PASSWORD` (task-manager style)
+3. Merge `deployment-env.yaml` block into the app Deployment — Django
+   env, `POSTGRES_*` via `secretKeyRef`, MinIO S3 vars for uploads
+4. Create the `device-marker-uploads` bucket in MinIO (one-time, via
+   console at NodePort 30700 or `mc`)
+5. Rollout → `kubectl exec` → `python manage.py seed_demo` → first users
 
-## Alternative: managed Postgres instead of postgres.yaml
+## Alternatives
 
-If the org already has RDS/CloudSQL/a Postgres cluster, skip
-`postgres.yaml` and point `POSTGRES_HOST` at it. Everything else stays.
+- **Managed Postgres** instead of `postgres.yaml`: point `POSTGRES_HOST`
+  at it, keep everything else
+- **PVC instead of MinIO** for uploads: use `uploads-pvc.yaml`, mount
+  `/app/private_uploads`, drop the `AWS_*` env block
 
-## Alternative: S3 instead of uploads-pvc.yaml
+## Notes
 
-Set `AWS_STORAGE_BUCKET_NAME` + `AWS_ACCESS_KEY_ID` +
-`AWS_SECRET_ACCESS_KEY` (+ `AWS_S3_ENDPOINT_URL` for MinIO) in env and
-skip the uploads PVC. App switches to object storage automatically.
-
-## Later: job worker + model server
-
-Auto-labeling needs a second container/deployment on the same image with
-command `python manage.py runworker`, and a reachable model endpoint for
-the `http` predictor. Not blocking — the platform works without it.
+- Cluster Postgres traffic is plain TCP → `POSTGRES_SSLMODE=disable`
+- No backups exist on any app DB today — if annotations matter, add a
+  `pg_dump` CronJob; nothing else on the cluster has one either
+- Later: worker deployment (`python manage.py runworker`) for
+  auto-label jobs, and a reachable model endpoint — not blocking

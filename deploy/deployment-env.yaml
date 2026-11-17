@@ -1,40 +1,58 @@
-# Env vars + volume for the device-marker app container.
-# Merge these into the existing deployment (base or overlay patch)
-# in the devops repo — wherever the container spec lives.
+# Env + volumes for the device-marker app container — merge into the
+# existing Deployment in k8s/services/device_marker/ (base or overlay).
+# Matches cluster conventions: secretKeyRef from device-marker-postgres-secret,
+# plain-TCP Postgres (no SSL in-cluster), shared MinIO for uploads.
 #
 # container env: — add:
+#   # ── Django ──
 #   - name: DJANGO_SECRET_KEY
 #     valueFrom:
 #       secretKeyRef: { name: device-marker-secrets, key: django-secret-key }
 #   - name: DJANGO_DEBUG
 #     value: "0"
 #   - name: DJANGO_ALLOWED_HOSTS
-#     value: "124.123.89.162"          # + domain when one exists
+#     value: "124.123.89.162"            # add domain when one exists
 #   - name: DJANGO_SECURE_COOKIES
-#     value: "0"                       # plain HTTP ingress — set 1 once TLS lands
+#     value: "0"                         # plain HTTP ingress — flip once TLS lands
 #   - name: DJANGO_SSL_REDIRECT
-#     value: "0"                       # same reason
+#     value: "0"                         # same reason
+#
+#   # ── Database (device-marker-postgres ClusterIP svc) ──
 #   - name: POSTGRES_DB
-#     value: "godezk"
+#     valueFrom:
+#       secretKeyRef: { name: device-marker-postgres-secret, key: POSTGRES_DB }
 #   - name: POSTGRES_USER
-#     value: "godezk_app"
+#     valueFrom:
+#       secretKeyRef: { name: device-marker-postgres-secret, key: POSTGRES_USER }
 #   - name: POSTGRES_PASSWORD
 #     valueFrom:
-#       secretKeyRef: { name: device-marker-secrets, key: postgres-password }
+#       secretKeyRef: { name: device-marker-postgres-secret, key: POSTGRES_PASSWORD }
 #   - name: POSTGRES_HOST
-#     value: "device-marker-postgres"  # service name from postgres.yaml
+#     value: "device-marker-postgres"
 #   - name: POSTGRES_PORT
 #     value: "5432"
 #   - name: POSTGRES_SSLMODE
-#     value: "require"
+#     value: "disable"                   # in-cluster traffic is plain TCP here
 #   - name: DJANGO_CONN_MAX_AGE
 #     value: "300"
 #
-# container volumeMounts: — add:
+#   # ── Uploads → shared MinIO (cluster already runs minio:9000) ──
+#   - name: AWS_STORAGE_BUCKET_NAME
+#     value: "device-marker-uploads"     # create bucket once in MinIO
+#   - name: AWS_S3_ENDPOINT_URL
+#     value: "http://minio:9000"
+#   - name: AWS_ACCESS_KEY_ID
+#     valueFrom:
+#       secretKeyRef: { name: minio-secret, key: rootUser }   # reuse the cluster's existing MinIO secret — adjust key names
+#   - name: AWS_SECRET_ACCESS_KEY
+#     valueFrom:
+#       secretKeyRef: { name: minio-secret, key: rootPassword }
+#
+# ── Alternative to MinIO: PVC for uploads (delete the AWS_* block) ──
+# container volumeMounts:
 #   - name: uploads
 #     mountPath: /app/private_uploads
-#
-# pod volumes: — add:
+# pod volumes:
 #   - name: uploads
 #     persistentVolumeClaim:
-#       claimName: device-marker-uploads
+#       claimName: device-marker-uploads   # see uploads-pvc.yaml

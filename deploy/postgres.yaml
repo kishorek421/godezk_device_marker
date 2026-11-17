@@ -1,6 +1,7 @@
-# PostgreSQL for godezk_device_marker — in-cluster instance.
-# Hand this to the DevOps repo: k8s/services/device_marker/ (base or overlay).
-# Adjust namespace + storage class to match the cluster.
+# PostgreSQL for device-marker — mirrors the cluster's per-app pattern
+# (postgres:15-alpine, ClusterIP svc, small local-path PVC — same as
+# mlops-postgres / attendance / vehicle / task-manager deployments).
+# Drop under k8s/services/device_marker/base/ in the devops repo.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -8,17 +9,21 @@ metadata:
   name: device-marker-postgres
 spec:
   accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
   resources:
     requests:
-      storage: 20Gi
+      storage: 5Gi
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: device-marker-postgres
+  labels:
+    app: device-marker-postgres
 spec:
-  serviceName: device-marker-postgres
   replicas: 1
+  strategy:
+    type: Recreate          # single-writer; avoid concurrent pods on one PVC
   selector:
     matchLabels:
       app: device-marker-postgres
@@ -29,19 +34,13 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: postgres:15-alpine
           ports:
             - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: device-marker-postgres-secret
           env:
-            - name: POSTGRES_DB
-              value: "godezk"
-            - name: POSTGRES_USER
-              value: "godezk_app"
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: device-marker-secrets
-                  key: postgres-password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
@@ -49,7 +48,7 @@ spec:
               mountPath: /var/lib/postgresql/data
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "godezk_app", "-d", "godezk"]
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
             initialDelaySeconds: 10
             periodSeconds: 10
       volumes:
@@ -62,6 +61,7 @@ kind: Service
 metadata:
   name: device-marker-postgres
 spec:
+  type: ClusterIP
   ports:
     - port: 5432
       targetPort: 5432
