@@ -69,10 +69,20 @@ def annotation_doc(regions, label_ids, relations=True):
 class Command(BaseCommand):
     help = 'Seed demo data driving the real API: workspace, members, labels, uploads, annotations, review, release.'
 
+    def add_arguments(self, parser):
+        parser.add_argument('--if-empty', action='store_true',
+                            help='Seed only when the user table is empty (safe for container startup)')
+
     def handle(self, *args, **options):
         User = get_user_model()
+        if options['if_empty'] and User.objects.exists():
+            self.stdout.write('Users already exist — skipping demo seed.')
+            return
         Workspace.objects.filter(name='Demo Lab').delete()
         User.objects.filter(username__startswith='demo_').delete()
+
+        if not User.objects.filter(username='admin').exists():
+            User.objects.create_superuser('admin', password='Admin2026!')
 
         owner = User.objects.create_user('demo_owner', password=PASSWORD)
         clients = {name: Client() for name in ('demo_owner', 'demo_annotator', 'demo_reviewer')}
@@ -148,6 +158,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f'''
 Demo data seeded. Log in at /accounts/login/ with any of:
 
+  admin          / Admin2026!   (superuser - Django admin)
   demo_owner     / {PASSWORD}   (workspace owner)
   demo_annotator / {PASSWORD}   (annotator - assigned tasks)
   demo_reviewer  / {PASSWORD}   (reviewer - approve/change-request)

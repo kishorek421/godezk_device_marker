@@ -36,7 +36,8 @@ EXPOSE 8008
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=4)" || exit 1
 
-# Apply migrations, then serve via gunicorn. Port matches containerPort
-# in k8s/services/device_marker. For the annotation job worker, deploy the
-# same image with command override: python manage.py runworker
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:8008 --workers 3 --timeout 120"]
+# Apply migrations, seed demo users on first boot (empty DB only), then
+# serve via gunicorn. Port matches containerPort in k8s/services/device_marker.
+# For the annotation job worker, deploy the same image with command
+# override: python manage.py runworker
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py seed_demo --if-empty && exec gunicorn config.wsgi:application --bind 0.0.0.0:8008 --workers 3 --timeout 120"]
