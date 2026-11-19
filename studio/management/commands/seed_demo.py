@@ -75,14 +75,14 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         User = get_user_model()
-        if options['if_empty'] and User.objects.exists():
+        if not User.objects.filter(username='admin').exists():
+            User.objects.create_superuser('admin', password='Admin2026!')
+            self.stdout.write('Created superuser: admin')
+        if options['if_empty'] and User.objects.exclude(username='admin').exists():
             self.stdout.write('Users already exist — skipping demo seed.')
             return
         Workspace.objects.filter(name='Demo Lab').delete()
         User.objects.filter(username__startswith='demo_').delete()
-
-        if not User.objects.filter(username='admin').exists():
-            User.objects.create_superuser('admin', password='Admin2026!')
 
         owner = User.objects.create_user('demo_owner', password=PASSWORD)
         clients = {name: Client() for name in ('demo_owner', 'demo_annotator', 'demo_reviewer')}
