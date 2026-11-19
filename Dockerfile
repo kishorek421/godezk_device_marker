@@ -40,4 +40,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 # serve via gunicorn. Port matches containerPort in k8s/services/device_marker.
 # For the annotation job worker, deploy the same image with command
 # override: python manage.py runworker
-CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py seed_demo --if-empty && exec gunicorn config.wsgi:application --bind 0.0.0.0:8008 --workers 3 --timeout 120"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && (python manage.py seed_demo --if-empty || echo 'seed skipped/failed — continuing') && exec gunicorn config.wsgi:application --bind 0.0.0.0:8008 --workers 3 --timeout 120"]

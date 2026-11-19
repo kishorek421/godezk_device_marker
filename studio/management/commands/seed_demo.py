@@ -37,10 +37,11 @@ def make_scene(index):
                         'attrs': {'state': 'on' if i == 0 else 'off'}})
     pts = [(200, 500), (310, 450), (430, 485), (560, 445), (575, 480), (435, 525), (305, 490)]
     d.polygon(pts, fill=(202, 140, 6))
-    regions.append({'label_key': 'cable', 'type': 'polygon', 'pixels': pts, 'attrs': {}})
+    xs, ys = zip(*pts)
+    regions.append({'label_key': 'cable', 'type': 'box', 'pixels': [(min(xs), min(ys)), (max(xs), max(ys))], 'attrs': {}})
     cx, cy = 770, 200 + rng.randint(-15, 15)
     d.ellipse([cx - 18, cy - 18, cx + 18, cy + 18], fill=(220, 60, 60), outline=(90, 20, 20), width=3)
-    regions.append({'label_key': 'indicator', 'type': 'point', 'pixels': [(cx, cy)], 'attrs': {'color': 'red'}})
+    regions.append({'label_key': 'indicator', 'type': 'box', 'pixels': [(cx - 18, cy - 18), (cx + 18, cy + 18)], 'attrs': {'color': 'red'}})
     buf = io.BytesIO()
     img.save(buf, 'JPEG', quality=92)
     return buf.getvalue(), regions
