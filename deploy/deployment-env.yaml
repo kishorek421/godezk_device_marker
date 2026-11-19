@@ -17,7 +17,13 @@
 #   - name: DJANGO_SSL_REDIRECT
 #     value: "0"                         # same reason
 #
-#   # ── Database (device-marker-postgres ClusterIP svc) ──
+#   # ── Database — pick ONE style (app accepts both) ──
+#   # Style A: single conn-string var (mlops pattern — secret key `url`)
+#   - name: DATABASE_URL
+#     valueFrom:
+#       secretKeyRef: { name: device-marker-postgres-secret, key: url }
+#
+#   # Style B: individual vars (task-manager pattern)
 #   - name: POSTGRES_DB
 #     valueFrom:
 #       secretKeyRef: { name: device-marker-postgres-secret, key: POSTGRES_DB }

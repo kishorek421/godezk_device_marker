@@ -165,7 +165,28 @@ SECURE_HSTS_PRELOAD = not DEBUG
 if os.environ.get('DJANGO_TRUST_PROXY') == '1':
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get('DJANGO_CSRF_ORIGINS', '').split(',') if o.strip()]
-if os.environ.get('POSTGRES_DB'):
+# Database: three ways to point at Postgres —
+#   1. DJANGO_DATABASE_URL / DATABASE_URL: full conn string (mlops-style
+#      `url` secret key), e.g. postgresql://u:p@host:5432/db
+#   2. POSTGRES_* individual vars
+#   3. neither → local SQLite
+_db_url = os.environ.get('DJANGO_DATABASE_URL') or os.environ.get('DATABASE_URL')
+if _db_url and _db_url.startswith('postgres'):
+    from urllib.parse import urlparse, parse_qs
+    _u = urlparse(_db_url.replace('postgres://', 'postgresql://', 1))
+    _opts = {k: v[0] for k, v in parse_qs(_u.query).items()}
+    _opts.setdefault('sslmode', os.environ.get('POSTGRES_SSLMODE', 'prefer'))
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': _u.path.lstrip('/'),
+        'USER': _u.username,
+        'PASSWORD': _u.password or '',
+        'HOST': _u.hostname or 'localhost',
+        'PORT': _u.port or 5432,
+        'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
+        'OPTIONS': _opts,
+    }
+elif os.environ.get('POSTGRES_DB'):
     DATABASES['default'] = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ['POSTGRES_DB'],
