@@ -1,0 +1,66 @@
+# Background job worker + AI model server for device-marker.
+# The worker processes the Job queue (agent.propose, webhook retries);
+# the model pod serves POST /predict consumed by studio's 'http' predictor.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: device-marker-worker
+  labels: {app: device-marker-worker}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: device-marker-worker}
+  template:
+    metadata:
+      labels: {app: device-marker-worker}
+    spec:
+      containers:
+        - name: worker
+          image: kishore2712/godezk_device_marker:dev-c9e864f
+          command: ["python", "manage.py", "runworker", "--interval", "2"]
+          envFrom:
+            - configMapRef: {name: device-marker-config}
+            - secretRef: {name: device-marker-postgres-secret}
+          env:
+            - {name: POSTGRES_HOST, value: device-marker-postgres}
+            - {name: POSTGRES_SSLMODE, value: disable}
+            - name: DJANGO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: device-marker-secrets, key: django-secret-key}
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: device-marker-model
+  labels: {app: device-marker-model}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: device-marker-model}
+  template:
+    metadata:
+      labels: {app: device-marker-model}
+    spec:
+      containers:
+        - name: model
+          image: kishore2712/godezk_device_model:dev-latest
+          env:
+            - {name: MODEL_WEIGHTS, value: yolov8n.pt}
+            - {name: PORT, value: "9000"}
+          ports: [{containerPort: 9000}]
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: device-marker-model
+  labels: {app: device-marker-model}
+spec:
+  selector: {app: device-marker-model}
+  ports:
+    - {port: 9000, targetPort: 9000}

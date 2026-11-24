@@ -18,6 +18,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WEIGHTS = os.environ.get('MODEL_WEIGHTS', 'helmet.pt')
+HOST = os.environ.get('HOST', '0.0.0.0')
 PORT = int(os.environ.get('PORT', '9000'))
 
 from ultralytics import YOLO  # noqa: E402
@@ -67,5 +68,5 @@ class Predict(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    print(f'Listening on http://127.0.0.1:{PORT}/predict')
-    ThreadingHTTPServer(('127.0.0.1', PORT), Predict).serve_forever()
+    print(f'Listening on http://{HOST}:{PORT}/predict')
+    ThreadingHTTPServer((HOST, PORT), Predict).serve_forever()

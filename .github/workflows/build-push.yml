@@ -53,6 +53,19 @@ jobs:
           cache-from: type=registry,ref=kishore2712/godezk_device_marker:buildcache
           cache-to: type=registry,ref=kishore2712/godezk_device_marker:buildcache,mode=max
 
+      - name: Build and push model-server image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.model
+          push: true
+          tags: |
+            kishore2712/godezk_device_model:latest
+            kishore2712/godezk_device_model:${{ github.sha }}
+            kishore2712/godezk_device_model:${{ steps.env.outputs.environment }}-latest
+          cache-from: type=registry,ref=kishore2712/godezk_device_model:buildcache
+          cache-to: type=registry,ref=kishore2712/godezk_device_model:buildcache,mode=max
+
       # Update the DevOps repository with the new image tag (GitOps → k8s)
       - name: Update DevOps repo with new image tag
         if: steps.env.outputs.environment != 'pr'
