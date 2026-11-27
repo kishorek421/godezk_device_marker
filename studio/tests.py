@@ -515,6 +515,63 @@ class WorkflowTests(TestCase):
         self.assertEqual(result.status_code, 400)
         self.assertEqual(Job.objects.filter(type='agent.propose').count(), 1)
 
+    def _similarity_setup(self):
+        from studio import agents
+        teacher = self.upload()
+        teacher.annotation = {'regions': [{'id': 'e1', 'label': str(self.label.pk), 'type': 'box',
+                                           'points': [[.1, .1], [.4, .4]], 'attributes': {}}], 'relations': []}
+        teacher.save(update_fields=['annotation'])
+        self.client.post(f'/projects/{self.project.pk}/upload/', {'images': self.image('other.png', 'blue')})
+        return agents, self.project.tasks.order_by('-id').first()
+
+    def test_similarity_predictor_matches_exemplar_label(self):
+        agents, target = self._similarity_setup()
+
+        def fake(url, payload, timeout):
+            if 'predict' in url:
+                return {'detections': [{'label': 'person', 'type': 'box',
+                                        'points': [[.1, .1], [.5, .5]], 'score': .9}]}
+            return {'embedding': [1.0, 0.0]}
+
+        with mock.patch('studio.agents._post_json', side_effect=fake):
+            out = agents.predict_similarity(target, {'detector_url': 'http://m/predict',
+                                                     'embed_url': 'http://m/embed'})
+        self.assertEqual(len(out['regions']), 1)
+        self.assertEqual(out['regions'][0]['label'], str(self.label.pk))
+        self.assertEqual(out['confidence'], [1.0])
+
+    def test_similarity_predictor_rejects_below_threshold(self):
+        agents, target = self._similarity_setup()
+        embeds = iter([[1.0, 0.0], [0.0, 1.0]])  # exemplar, then non-matching detection
+
+        def fake(url, payload, timeout):
+            if 'predict' in url:
+                return {'detections': [{'label': 'person', 'type': 'box',
+                                        'points': [[.1, .1], [.5, .5]], 'score': .9}]}
+            return {'embedding': next(embeds)}
+
+        with mock.patch('studio.agents._post_json', side_effect=fake):
+            out = agents.predict_similarity(target, {'detector_url': 'http://m/predict',
+                                                     'embed_url': 'http://m/embed'})
+        self.assertEqual(out['regions'], [])
+
+    def test_similarity_predictor_falls_back_to_label_map(self):
+        agents, target = self._similarity_setup()
+        embeds = iter([[1.0, 0.0], [0.0, 1.0]])
+
+        def fake(url, payload, timeout):
+            if 'predict' in url:
+                return {'detections': [{'label': 'person', 'type': 'box',
+                                        'points': [[.1, .1], [.5, .5]], 'score': .9}]}
+            return {'embedding': next(embeds)}
+
+        with mock.patch('studio.agents._post_json', side_effect=fake):
+            out = agents.predict_similarity(target, {'detector_url': 'http://m/predict',
+                                                     'embed_url': 'http://m/embed',
+                                                     'label_map': {'person': 'switch'}})
+        self.assertEqual(len(out['regions']), 1)
+        self.assertEqual(out['regions'][0]['label'], str(self.label.pk))
+
     def test_proposal_decision_accept_and_undo(self):
         task = self.upload()
         task.assignee = self.worker
